@@ -1,11 +1,12 @@
 import { app, BrowserWindow, ipcMain, net, protocol, safeStorage, shell, type IpcMainInvokeEvent } from "electron";
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, normalize, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { ATTENDANCE_TOOL_ID, CANVAS_ORIGIN, liveOptions } from "../engine/live.ts";
-import type { ChatReply, DownloadEvent, ReadCommand, Settings, Snapshot } from "../shared/types.ts";
+import { courseFolder } from "../engine/materials.ts";
+import type { ChatReply, DownloadEvent, ReadCommand, Settings, Snapshot, SttEvent, SttPlan } from "../shared/types.ts";
 import { GatewayClient, type Opener } from "./ai.ts";
 import { devConfig } from "./dev.ts";
 import { ElectronBrowserSession } from "./electron-cdp.ts";
@@ -13,9 +14,10 @@ import { isAiLoginUrl, isAllowedPage, isDownloadHost } from "./hosts.ts";
 import { LmsService } from "./lms.ts";
 import { ReminderScheduler } from "./reminders.ts";
 import { keepLogin, makeEngineWindow, openSchoolWindow, schoolSession, signIn, signOut } from "./school.ts";
-import { COMMAND_PROMPT, SUMMARY_PROMPT, commandUserPrompt, parseCommand, parseSummaries, summaryUserPrompt } from "./sentence.ts";
+import { COMMAND_PROMPT, SUMMARY_LECTURE_PROMPT, SUMMARY_PROMPT, commandUserPrompt, parseCommand, parseSummaries, summaryUserPrompt } from "./sentence.ts";
 import { CHAT_PROMPT, chatUserPrompt, CLARIFY_PROMPT, commandOf, jevRequest, pageUrl, parseJev, routeUserPrompt } from "./route.ts";
 import { StateStore } from "./state.ts";
+import { captionText, estimateCredits, extractAudio, fetchCaption, resolveMedia, STT_MODEL, STT_SPEED, toSrt } from "./stt.ts";
 
 const APP_ORIGIN = "app://kurowser";
 const DIST_DIR = join(app.getAppPath(), "dist");
@@ -179,7 +181,111 @@ async function chat(text: string): Promise<ChatReply> {
   }
 }
 
+function ffmpegPath(): string {
+  const exe = process.platform === "win32" ? "ffmpeg.exe" : "ffmpeg";
+  return app.isPackaged ? join(process.resourcesPath, "ffmpeg", exe) : join(app.getAppPath(), "node_modules", "ffmpeg-static", exe);
+}
+
+/** One summary call to the cheap chat model: about 0.3 credit for the model plus the 5-credit filter fee. */
+const SUMMARY_CREDITS = 6;
+const sttRunning = new Set<string>();
+
+/** Dev runs may cap the audio (KUROWSER_STT_CLIP_SECONDS) so a real-account test spends only a clip's credits. */
+function clipSeconds(): number | undefined {
+  const n = Number(!app.isPackaged ? process.env.KUROWSER_STT_CLIP_SECONDS : "");
+  return n > 0 ? n : undefined;
+}
+
+async function sttPlan(id: string): Promise<SttPlan> {
+  const data = lms.mediaData(id);
+  if (!data) return { ok: false, text: "그 강의를 찾지 못했어요" };
+  try {
+    const media = await resolveMedia(schoolSession(), data);
+    if (!gateway.connected) return { ok: false, text: "고대 AI를 연결하면 자막과 요약을 만들 수 있어요" };
+    if (media.captionUrls.length) {
+      const remaining = await gateway.credits();
+      const enough = remaining !== null && remaining >= SUMMARY_CREDITS;
+      const text = `공식 자막 사용(0크레딧), 요약 약 ${SUMMARY_CREDITS}크레딧, 남은 크레딧 ${remaining === null ? "확인 못 함" : Math.floor(remaining)}`;
+      return { ok: enough, source: "captions", credits: SUMMARY_CREDITS, remaining, text: enough ? text : `${text}. 크레딧이 모자라서 시작하지 않아요` };
+    }
+    const seconds = Math.min(media.duration, clipSeconds() ?? Infinity);
+    const credits = estimateCredits(seconds, STT_SPEED) + SUMMARY_CREDITS;
+    const remaining = await gateway.credits();
+    const minutes = Math.max(1, Math.round(seconds / 60));
+    const enough = remaining !== null && remaining >= credits;
+    const text = `STT 사용: 이 강의 ${minutes}분 ≈ ${credits.toFixed(1)}크레딧(요약 포함), 남은 크레딧 ${remaining === null ? "확인 못 함" : Math.floor(remaining)}`;
+    return { ok: enough, source: "stt", minutes, credits, remaining, text: enough ? text : `${text}. 크레딧이 모자라서 시작하지 않아요` };
+  } catch (error) {
+    return { ok: false, text: error instanceof Error ? error.message : "강의 정보를 읽지 못했어요" };
+  }
+}
+
+/**
+ * Subtitles and a summary for one recorded lecture. Official captions come first (no credits); otherwise the main
+ * video's audio, sped up 1.5x, goes to the Gateway STT. Only the content description and the media file are read:
+ * no viewer, playback, progress or attendance request is made. Files land beside the course's materials.
+ */
+async function sttRun(id: string): Promise<void> {
+  const emit = (e: SttEvent): void => send("stt", e);
+  if (sttRunning.has(id)) return emit({ id, kind: "failed", text: "이 강의는 이미 만드는 중이에요" });
+  sttRunning.add(id);
+  try {
+    await sttRunOnce(id, emit);
+  } finally {
+    sttRunning.delete(id);
+  }
+}
+
+async function sttRunOnce(id: string, emit: (e: SttEvent) => void): Promise<void> {
+  const plan = await sttPlan(id);
+  if (!plan.ok) return emit({ id, kind: "failed", text: plan.text });
+  const rec = lms.snapshot().recordings.find((r) => r.id === id)!;
+  const course = lms.snapshot().courses.find((c) => c.id === rec.courseId)?.name ?? "기타";
+  const folder = join(downloadDir(), courseFolder(course));
+  const base = join(folder, `${rec.week ?? ""}주차 ${rec.title}`.trim().replace(/[\\/:*?"<>|]/g, "_").slice(0, 80));
+  const work = mkdtempSync(join(app.getPath("temp"), "kurowser-stt-"));
+  try {
+    mkdirSync(folder, { recursive: true });
+    const media = await resolveMedia(schoolSession(), lms.mediaData(id)!);
+    let text: string;
+    if (plan.source === "captions") {
+      emit({ id, kind: "progress", text: "공식 자막을 받는 중이에요" });
+      const raw = await fetchCaption(media.captionUrls[0]!);
+      writeFileSync(`${base}_자막${/-->/.test(raw) && raw.includes("WEBVTT") ? ".vtt" : ".srt"}`, raw);
+      text = captionText(raw);
+    } else {
+      emit({ id, kind: "progress", text: "강의 음성을 뽑는 중이에요" });
+      const audio = join(work, "lecture.mp3");
+      await extractAudio(ffmpegPath(), media.mediaUrl, audio, { clipSeconds: clipSeconds(), speed: STT_SPEED, normalize: true });
+      emit({ id, kind: "progress", text: "받아쓰는 중이에요" });
+      const result = await gateway.transcribe(audio, STT_MODEL);
+      // Timestamps come back on the sped-up audio; scale them to the lecture's own clock.
+      const segments = result.segments.map((s) => ({ ...s, start_ms: Math.round(s.start_ms * STT_SPEED), end_ms: Math.round(s.end_ms * STT_SPEED) }));
+      writeFileSync(`${base}_자막.srt`, toSrt(segments));
+      writeFileSync(`${base}_자막.txt`, result.text);
+      text = result.text;
+    }
+    emit({ id, kind: "progress", text: "요약하는 중이에요" });
+    const summary = await gateway.complete(SUMMARY_LECTURE_PROMPT, text.slice(0, 60_000), 700);
+    writeFileSync(`${base}_요약.md`, summary);
+    emit({ id, kind: "done", text: plan.source === "captions" ? "공식 자막으로 요약했어요" : "자막과 요약을 만들었어요", summary, folder });
+  } catch (error) {
+    emit({ id, kind: "failed", text: error instanceof Error ? error.message : "자막을 만들지 못했어요" });
+  } finally {
+    rmSync(work, { recursive: true, force: true });
+  }
+}
+
 function registerIpc(): void {
+  handle("sttPlan", (id: unknown) => (typeof id === "string" ? sttPlan(id) : { ok: false, text: "" }));
+  handle("sttRun", (id: unknown) => {
+    if (typeof id === "string") void sttRun(id);
+  });
+  handle("openFolder", async (path: unknown) => {
+    if (typeof path !== "string") return;
+    const target = normalize(path);
+    if (target.startsWith(downloadDir() + sep) && existsSync(target) && statSync(target).isDirectory()) await shell.openPath(target);
+  });
   handle("chat", (text: unknown): Promise<ChatReply> | ChatReply =>
     typeof text === "string" && text.trim() ? chat(text.trim().slice(0, 300)) : { kind: "error", text: "" },
   );

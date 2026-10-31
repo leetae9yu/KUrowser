@@ -57,6 +57,11 @@ export const SUMMARY_PROMPT = `너는 대학 공지를 한 줄로 줄이는 도�
 날짜, 시간, 장소, 숫자는 원문 그대로 남겨. 원문에 없는 내용은 쓰지 마.
 답은 JSON 문자열 배열 하나만 써. 공지 순서와 개수를 그대로 맞춰.`;
 
+export const SUMMARY_LECTURE_PROMPT = `너는 대학 강의 자막을 정리하는 도우미야. 아래 자막을 읽고 한국어로 정리해.
+1. 다룬 주제를 나온 순서대로 3~6개 항목으로 써.
+2. 중요한 용어, 정의, 시험에 나올 만한 내용을 따로 적어.
+자막에 없는 내용은 쓰지 마. 마크다운 목록으로 써.`;
+
 export function summaryUserPrompt(notices: Array<{ title: string; body: string }>): string {
   return notices.map((n, i) => `${i + 1}. 제목: ${n.title}\n본문: ${n.body}`).join("\n\n");
 }
