@@ -1,0 +1,171 @@
+/* Design tokens: the single source of colour, type, spacing, radius, motion. */
+:root {
+  color-scheme: light;
+  --font-sans: "Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+
+  /* colour roles: light */
+  --bg: #ffffff;
+  --bg-sidebar: #f4f4f6;
+  --bg-hover: #ececf0;
+  --bg-wash: #f6f6f8;
+  --surface: #ffffff;
+  --surface-raised: #ffffff;
+  --border: #e2e2e7;
+  --border-strong: #c4c4cc;
+  --text: #1c1c1f;
+  --text-2: #55555e;
+  --text-3: #6b6b74;
+  --accent: #0a62cf;
+  --accent-solid: #0a62cf;
+  --accent-solid-hover: #0853b0;
+  --on-accent: #ffffff;
+  --accent-wash: rgba(10, 98, 207, 0.1);
+  --danger: #c22b22;
+  --danger-wash: rgba(194, 43, 34, 0.09);
+  --warn: #9a5300;
+  --success: #1d7440;
+  --success-wash: rgba(29, 116, 64, 0.1);
+  --focus: #0a62cf;
+  --scrim: rgba(20, 20, 24, 0.28);
+  --shadow-pop: 0 16px 40px rgba(20, 20, 30, 0.14), 0 2px 6px rgba(20, 20, 30, 0.06);
+  --shadow-float: 0 8px 24px rgba(20, 20, 30, 0.14);
+
+  /* course hues (paired with the course name, never alone) */
+  --hue-1: #2b6fd6;
+  --hue-2: #1f8a4c;
+  --hue-3: #c76a00;
+  --hue-4: #7a4fd4;
+  --hue-5: #c23a6c;
+
+  /* type */
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-md: 14px;
+  --text-lg: 16px;
+  --text-xl: 20px;
+  --text-2xl: 26px;
+  --text-hero: 28px;
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+  --leading-tight: 1.3;
+  --leading-body: 1.5;
+
+  /* spacing */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+
+  /* radius */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-pill: 999px;
+
+  /* sizing */
+  --control-h: 32px;
+  --btn-lg-h: 56px;
+  --stage-max: 460px;
+  --side-w: 400px;
+  --row-min-h: 52px;
+  --appbar-h: 56px;
+
+  /* motion */
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --dur-fast: 120ms;
+  --dur-base: 200ms;
+  --dur-slow: 360ms;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #17171a;
+  --bg-sidebar: #1f1f23;
+  --bg-hover: #2a2a2f;
+  --bg-wash: #1d1d21;
+  --surface: #1c1c20;
+  --surface-raised: #26262b;
+  --border: #303036;
+  --border-strong: #4a4a52;
+  --text: #f1f1f4;
+  --text-2: #b4b4bc;
+  --text-3: #9d9da6;
+  --accent: #5ea2ff;
+  --accent-solid: #1f6ad6;
+  --accent-solid-hover: #2b77e4;
+  --on-accent: #ffffff;
+  --accent-wash: rgba(94, 162, 255, 0.14);
+  --danger: #ff7a70;
+  --danger-wash: rgba(255, 122, 112, 0.12);
+  --warn: #f0a945;
+  --success: #57cf8a;
+  --success-wash: rgba(87, 207, 138, 0.13);
+  --focus: #5ea2ff;
+  --scrim: rgba(0, 0, 0, 0.5);
+  --shadow-pop: 0 16px 40px rgba(0, 0, 0, 0.5), 0 0 0 1px #34343a;
+  --shadow-float: 0 8px 24px rgba(0, 0, 0, 0.45), 0 0 0 1px #34343a;
+  --hue-1: #6aa5ff;
+  --hue-2: #4cc47f;
+  --hue-3: #f0a03c;
+  --hue-4: #a98bff;
+  --hue-5: #ff7aa8;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #17171a;
+    --bg-sidebar: #1f1f23;
+    --bg-hover: #2a2a2f;
+    --bg-wash: #1d1d21;
+    --surface: #1c1c20;
+    --surface-raised: #26262b;
+    --border: #303036;
+    --border-strong: #4a4a52;
+    --text: #f1f1f4;
+    --text-2: #b4b4bc;
+    --text-3: #9d9da6;
+    --accent: #5ea2ff;
+    --accent-solid: #1f6ad6;
+    --accent-solid-hover: #2b77e4;
+    --on-accent: #ffffff;
+    --accent-wash: rgba(94, 162, 255, 0.14);
+    --danger: #ff7a70;
+    --danger-wash: rgba(255, 122, 112, 0.12);
+    --warn: #f0a945;
+    --success: #57cf8a;
+    --success-wash: rgba(87, 207, 138, 0.13);
+    --focus: #5ea2ff;
+    --scrim: rgba(0, 0, 0, 0.5);
+    --shadow-pop: 0 16px 40px rgba(0, 0, 0, 0.5), 0 0 0 1px #34343a;
+    --shadow-float: 0 8px 24px rgba(0, 0, 0, 0.45), 0 0 0 1px #34343a;
+    --hue-1: #6aa5ff;
+    --hue-2: #4cc47f;
+    --hue-3: #f0a03c;
+    --hue-4: #a98bff;
+    --hue-5: #ff7aa8;
+  }
+}
+
+/* phone: bigger type and touch-size controls */
+@media (max-width: 767px) {
+  :root {
+    --text-xs: 13px;
+    --text-sm: 15px;
+    --text-md: 17px;
+    --text-lg: 19px;
+    --text-2xl: 28px;
+    --text-hero: 27px;
+    --control-h: 44px;
+    --row-min-h: 60px;
+  }
+}
