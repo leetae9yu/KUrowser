@@ -52,6 +52,30 @@ export interface FileItem {
   isNew: boolean;
 }
 
+/** A recorded lecture (watched or not) whose subtitles and summary the app can make. */
+export interface Recording {
+  id: string;
+  courseId: string;
+  title: string;
+  week: number | null;
+  seconds: number;
+  watched: boolean;
+}
+
+export interface SttPlan {
+  ok: boolean;
+  text: string;
+  source?: "captions" | "stt";
+  minutes?: number;
+  credits?: number;
+  remaining?: number | null;
+}
+
+export type SttEvent =
+  | { id: string; kind: "progress"; text: string }
+  | { id: string; kind: "done"; text: string; summary: string; folder: string }
+  | { id: string; kind: "failed"; text: string };
+
 export type LoadPart = "courses" | "lectures" | "files";
 
 export interface Snapshot {
@@ -61,6 +85,7 @@ export interface Snapshot {
   courses: Course[];
   assignments: Assignment[];
   lectures: Lecture[];
+  recordings: Recording[];
   notices: Notice[];
   files: FileItem[];
   /** Parts still loading in the background; the first screen does not wait for them. */
@@ -122,4 +147,8 @@ export interface KurowserApi {
   onAiStatus(fn: (text: string) => void): () => void;
   interpret(text: string): Promise<{ via: "ai" | "rules"; command: ReadCommand } | null>;
   chat(text: string): Promise<ChatReply>;
+  sttPlan(id: string): Promise<SttPlan>;
+  sttRun(id: string): Promise<void>;
+  onStt(fn: (e: SttEvent) => void): () => void;
+  openFolder(path: string): Promise<void>;
 }

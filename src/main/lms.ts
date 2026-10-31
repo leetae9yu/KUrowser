@@ -7,7 +7,7 @@ import { LiveCommandError } from "../engine/errors.ts";
 import { isUnauthorized, modules as learningxModules, workItems } from "../engine/learningx.ts";
 import { ATTENDANCE_TOOL_ID, CANVAS_ORIGIN, fetchCourses, fetchRecordingPages, recordingAccessible, unwatchedRows } from "../engine/live.ts";
 import { STATE_FILENAME, courseFolder, materialCandidates, syncMaterials } from "../engine/materials.ts";
-import type { Assignment, Course, FileItem, Hue, Lecture, LoadPart, Notice, Snapshot } from "../shared/types.ts";
+import type { Assignment, Course, FileItem, Hue, Lecture, LoadPart, Notice, Recording, Snapshot } from "../shared/types.ts";
 import { type ElectronBrowserSession, LoginRequired } from "./electron-cdp.ts";
 
 type Raw = Record<string, any>;
@@ -68,7 +68,7 @@ export function aliasesFor(name: string): string[] {
 }
 
 function emptySnapshot(phase: Snapshot["phase"]): Snapshot {
-  return { phase, error: null, courses: [], assignments: [], lectures: [], notices: [], files: [], pending: [], reminders: [], fetchedAt: null };
+  return { phase, error: null, courses: [], assignments: [], lectures: [], recordings: [], notices: [], files: [], pending: [], reminders: [], fetchedAt: null };
 }
 
 interface Links {
@@ -76,6 +76,7 @@ interface Links {
   lectures: Map<string, string>;
   notices: Map<string, string>;
   files: Map<string, Raw>;
+  media: Map<string, Raw>;
 }
 
 export interface LmsDeps {
@@ -95,7 +96,7 @@ export class LmsService {
   private raws = new Map<string, Raw>();
   /** Attendance read while getting the LearningX token, reused by the lecture pass of the same load. */
   private warmAttendance = new Map<string, Raw>();
-  private links: Links = { assignments: new Map(), lectures: new Map(), notices: new Map(), files: new Map() };
+  private links: Links = { assignments: new Map(), lectures: new Map(), notices: new Map(), files: new Map(), media: new Map() };
   private listeners = new Set<(s: Snapshot) => void>();
   private refreshing: Promise<void> | null = null;
   private readonly downloadTokens = new Set<{ canceled: boolean }>();
@@ -269,6 +270,8 @@ export class LmsService {
 
   private async loadLectures(session: ElectronBrowserSession): Promise<void> {
     const lectures: Lecture[] = [];
+    const recordings: Recording[] = [];
+    const media = new Map<string, Raw>();
     const urls = new Map<string, string>();
     const courses = [...this.raws.values()].filter((course) => course.workflow_state !== "unpublished");
     // Module links are plain fetches and can overlap; attendance navigates the window, so it goes one course at a time after them.
@@ -277,6 +280,22 @@ export class LmsService {
       const courseId = String(course.id);
       const attendance = this.warmAttendance.get(courseId) ?? (await session.fetchAttendance(course.id));
       const pages = links[i]!;
+      const summaries: Raw = attendance.summary?.attendance_summaries ?? {};
+      for (const item of (attendance.attendance_items?.attendance_items ?? []) as Raw[]) {
+        const data = item.item_content_data;
+        if (item.item_content_type !== "commons" || !item.use_attendance || item.lecture_period_status === "not_open" || !data?.content_id) continue;
+        const id = hash(courseId, "rec", item.item_id);
+        media.set(id, data);
+        const status = String(summaries[String(item.item_id)]?.attendance_status ?? "none");
+        recordings.push({
+          id,
+          courseId,
+          title: String(item.title ?? ""),
+          week: typeof item.week_position === "number" ? item.week_position : null,
+          seconds: Number(data.duration) || 0,
+          watched: ["attendance", "late", "excused"].includes(status),
+        });
+      }
       for (const row of unwatchedRows(course, attendance)) {
         if (!row.available) continue;
         const until = iso(row.due_at) || null;
@@ -286,8 +305,8 @@ export class LmsService {
         urls.set(id, pages.get(normalizeTitle(String(row.title))) ?? `${CANVAS_ORIGIN}/courses/${courseId}/external_tools/${ATTENDANCE_TOOL_ID}`);
       }
     }
-    this.links = { ...this.links, lectures: urls };
-    this.set({ lectures });
+    this.links = { ...this.links, lectures: urls, media };
+    this.set({ lectures, recordings });
   }
 
   /**
@@ -351,6 +370,11 @@ export class LmsService {
     this.set({ files });
   }
 
+  /** The Commons content data of a recorded lecture (content id, viewer address, length); never the viewer itself. */
+  mediaData(id: string): Raw | null {
+    return this.links.media.get(id) ?? null;
+  }
+
   url(kind: "assignment" | "lecture" | "notice", id: string): string | null {
     const map = kind === "assignment" ? this.links.assignments : kind === "lecture" ? this.links.lectures : this.links.notices;
     return map.get(id) ?? null;
@@ -412,7 +436,7 @@ export class LmsService {
   }
 
   loggedOut(): void {
-    this.links = { assignments: new Map(), lectures: new Map(), notices: new Map(), files: new Map() };
+    this.links = { assignments: new Map(), lectures: new Map(), notices: new Map(), files: new Map(), media: new Map() };
     this.raws.clear();
     this.set({ ...emptySnapshot("login") });
   }

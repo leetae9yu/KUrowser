@@ -30,6 +30,10 @@ const api: KurowserApi = {
   onAiStatus: (fn) => listen("aiStatus", fn),
   interpret: (text) => ipcRenderer.invoke("interpret", text),
   chat: (text) => ipcRenderer.invoke("chat", text),
+  sttPlan: (id) => ipcRenderer.invoke("sttPlan", id),
+  sttRun: (id) => ipcRenderer.invoke("sttRun", id),
+  onStt: (fn) => listen("stt", fn),
+  openFolder: (path) => ipcRenderer.invoke("openFolder", path),
 };
 
 contextBridge.exposeInMainWorld("kurowser", api);

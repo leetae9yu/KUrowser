@@ -287,6 +287,36 @@ export class GatewayClient {
     return res.status === 200 ? res.json() : { status: res.status };
   }
 
+  /**
+   * Starts a Gateway transcription (charged once, at start, by audio length) and polls it every 10 s until it ends.
+   * Callers show the estimate and check the balance first.
+   */
+  async transcribe(file: string, model: string): Promise<{ text: string; segments: Array<{ start_ms: number; end_ms: number; text: string }>; charged: number | null; durationSeconds: number | null }> {
+    if (!this.key) throw new Error("AI가 연결되어 있지 않아요");
+    const auth = { Authorization: `Bearer ${this.key}` };
+    const form = new FormData();
+    form.append("file", new Blob([readFileSync(file)], { type: "audio/mpeg" }), "lecture.mp3");
+    form.append("model", model);
+    form.append("language_hints", "ko");
+    form.append("enable_speaker_diarization", "false");
+    const start = await fetch(`${GATEWAY}/audio/transcriptions/`, { method: "POST", headers: auth, body: form });
+    if (start.status !== 200) throw new Error(`받아쓰기를 시작하지 못했어요 (HTTP ${start.status})`);
+    const job = (await start.json()) as { operation_id?: string; credits_charged?: number; duration_seconds?: number };
+    if (!job.operation_id) throw new Error("받아쓰기 작업 번호를 받지 못했어요");
+    const deadline = Date.now() + 40 * 60 * 1000;
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 10_000));
+      const res = await fetch(`${GATEWAY}/audio/transcriptions/${encodeURIComponent(job.operation_id)}/`, { headers: auth });
+      if (res.status !== 200) continue;
+      const body = (await res.json()) as { status?: string; text?: string; segments?: Array<{ start_ms: number; end_ms: number; text: string }>; error?: string };
+      if (body.status === "failed") throw new Error(`받아쓰기가 실패했어요: ${body.error ?? ""}`);
+      if (body.status === "completed") {
+        return { text: body.text ?? "", segments: body.segments ?? [], charged: job.credits_charged ?? null, durationSeconds: job.duration_seconds ?? null };
+      }
+    }
+    throw new Error("받아쓰기가 너무 오래 걸려요");
+  }
+
   async models(type?: string): Promise<string[]> {
     if (!this.key) return [];
     const res = await net.fetch(`${GATEWAY}/models/${type ? `?type=${encodeURIComponent(type)}` : ""}`, { headers: { Authorization: `Bearer ${this.key}` } });
