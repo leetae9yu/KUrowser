@@ -7,13 +7,14 @@ import { pathToFileURL } from "node:url";
 import { ATTENDANCE_TOOL_ID, CANVAS_ORIGIN, liveOptions } from "../engine/live.ts";
 import { courseFolder } from "../engine/materials.ts";
 import type { ChatReply, DownloadEvent, ReadCommand, Settings, Snapshot, SttEvent, SttPlan } from "../shared/types.ts";
-import { GatewayClient, type Opener } from "./ai.ts";
+import { GatewayClient } from "./ai.ts";
 import { devConfig } from "./dev.ts";
 import { ElectronBrowserSession } from "./electron-cdp.ts";
 import { isAiLoginUrl, isAllowedPage, isDownloadHost } from "./hosts.ts";
 import { LmsService } from "./lms.ts";
 import { ReminderScheduler } from "./reminders.ts";
-import { keepLogin, makeEngineWindow, openSchoolWindow, schoolSession, signIn, signOut } from "./school.ts";
+import { SchoolPane } from "./pane.ts";
+import { keepLogin, makeEngineWindow, schoolSession, signIn, signOut } from "./school.ts";
 import { COMMAND_PROMPT, SUMMARY_LECTURE_PROMPT, SUMMARY_PROMPT, commandUserPrompt, parseCommand, parseSummaries, summaryUserPrompt } from "./sentence.ts";
 import { CHAT_PROMPT, chatUserPrompt, CLARIFY_PROMPT, commandOf, jevRequest, pageUrl, parseJev, routeUserPrompt } from "./route.ts";
 import { StateStore } from "./state.ts";
@@ -30,7 +31,6 @@ const KEYCHAIN_HINT_MS = 2500;
 
 let mainWindow: BrowserWindow | null = null;
 let gatewayRestored = false;
-let aiAttempted = false;
 
 protocol.registerSchemesAsPrivileged([{ scheme: "app", privileges: { standard: true, secure: true, supportFetchAPI: true } }]);
 
@@ -46,6 +46,11 @@ function downloadDir(): string {
 const store = new StateStore(join(app.getPath("userData"), "state.json"));
 const reminders = new ReminderScheduler(store);
 const gateway = new GatewayClient();
+const pane = new SchoolPane(
+  () => mainWindow,
+  (state) => send("pane", state),
+);
+let aiAttempted = false;
 const lms = new LmsService({
   makeSession: engineSession,
   downloadDir,
@@ -93,23 +98,8 @@ const strings = (value: unknown): string[] => (Array.isArray(value) ? value.filt
 
 function openFromSnapshot(kind: "assignment" | "lecture" | "notice", id: unknown): void {
   const url = typeof id === "string" ? lms.url(kind, id) : null;
-  if (url) openSchoolWindow(url);
+  if (url) pane.open(url);
 }
-
-/** Shows the AI site's login in a school window when the portal session has lapsed. */
-const aiOpener: Opener = (() => {
-  let win: BrowserWindow | null = null;
-  return {
-    open(url: string) {
-      win = openSchoolWindow(url, mainWindow ?? undefined);
-      return win?.webContents ?? null;
-    },
-    close() {
-      if (win && !win.isDestroyed()) win.close();
-      win = null;
-    },
-  };
-})();
 
 /**
  * The first portal sign-in also connects the AI: the AI site uses the same portal login, so the key is issued in
@@ -118,7 +108,7 @@ const aiOpener: Opener = (() => {
 async function connectAi(): Promise<{ ok: boolean; text: string }> {
   aiAttempted = true;
   try {
-    const text = await gateway.connect(aiOpener, (status) => send("aiStatus", status));
+    const text = await gateway.connect(pane, (status) => send("aiStatus", status));
     return { ok: true, text };
   } catch (error) {
     return { ok: false, text: error instanceof Error ? error.message : "연결하지 못했어요" };
@@ -146,9 +136,9 @@ function chatContext(): string {
 
 /**
  * A sentence the local rules could not place. Jev classifies it in one decisions call; a confident read runs a
- * read command, a page request opens the school page, a write request is refused with the page to do it on, and
- * conversation goes to the cheap chat model. Each Gateway call carries a flat filter fee, so a sentence costs one
- * or two calls at most.
+ * read command, a page request opens the school page on the left, a write request is refused with the page to do
+ * it on, and conversation goes to the cheap chat model. Each Gateway call carries a flat filter fee, so a sentence
+ * costs one or two calls at most.
  */
 async function chat(text: string): Promise<ChatReply> {
   if (!gateway.connected) return { kind: "error", text: "고대 AI가 아직 연결되지 않았어요" };
@@ -161,18 +151,18 @@ async function chat(text: string): Promise<ChatReply> {
     if (route.kind !== "chat" && route.confidence < ROUTE_CONFIDENCE) {
       return { kind: "clarify", text: await gateway.complete(CLARIFY_PROMPT, routeUserPrompt(text, courses), 80) };
     }
-    const open = (): boolean => !!openSchoolWindow(pageUrl(CANVAS_ORIGIN, route.topic, courseId(route.course), ATTENDANCE_TOOL_ID));
+    const open = (): boolean => !!pane.open(pageUrl(CANVAS_ORIGIN, route.topic, courseId(route.course), ATTENDANCE_TOOL_ID));
     switch (route.kind) {
       case "write":
         open();
-        return { kind: "refused", text: "제출, 출석, 글쓰기처럼 학교에 무언가를 바꾸는 일은 앱이 하지 않아요. 열어 둔 학교 화면에서 직접 해 주세요." };
+        return { kind: "refused", text: "제출, 출석, 글쓰기처럼 학교에 무언가를 바꾸는 일은 앱이 하지 않아요. 왼쪽 학교 화면에서 직접 해 주세요." };
       case "command": {
         const command = commandOf(route);
         if (command) return { kind: "command", command };
-        return open() ? { kind: "opened", text: "학교 화면을 열었어요" } : { kind: "error", text: "그 화면을 열지 못했어요" };
+        return open() ? { kind: "opened", text: "왼쪽에 학교 화면을 열었어요" } : { kind: "error", text: "그 화면을 열지 못했어요" };
       }
       case "path":
-        return open() ? { kind: "opened", text: `${route.course ? `${route.course} ` : ""}학교 화면을 열었어요` } : { kind: "error", text: "그 화면을 열지 못했어요" };
+        return open() ? { kind: "opened", text: `${route.course ? `${route.course} ` : ""}학교 화면을 왼쪽에 열었어요` } : { kind: "error", text: "그 화면을 열지 못했어요" };
       case "chat":
         return { kind: "answer", text: await gateway.complete(CHAT_PROMPT, chatUserPrompt(text, chatContext()), 300) };
     }
@@ -299,7 +289,7 @@ function registerIpc(): void {
   handle("snapshot", (): Snapshot => lms.snapshot());
   handle("refresh", () => lms.refresh());
   handle("login", async () => {
-    const ok = await signIn(mainWindow ?? undefined);
+    const ok = await signIn(pane);
     if (ok) {
       void lms.refresh();
       if (!gateway.connected) void connectAi();
@@ -372,6 +362,10 @@ function registerIpc(): void {
     return settings();
   });
   handle("connectAi", () => connectAi());
+  handle("paneState", () => pane.state());
+  handle("paneBack", () => pane.back());
+  handle("paneClose", () => pane.close());
+  handle("paneWiden", () => pane.widen());
   handle("interpret", async (text: unknown): Promise<{ via: "ai"; command: ReadCommand } | null> => {
     if (typeof text !== "string" || !text.trim() || !gateway.connected) return null;
     const courses = lms.snapshot().courses.map((c) => c.name);
@@ -397,6 +391,7 @@ function createMainWindow(): BrowserWindow {
   win.webContents.on("will-navigate", (event, url) => {
     if (!url.startsWith(`${APP_ORIGIN}/`)) event.preventDefault();
   });
+  win.on("resize", () => pane.layout());
   win.on("focus", () => {
     const fetchedAt = lms.snapshot().fetchedAt;
     if (fetchedAt && Date.now() - Date.parse(fetchedAt) > STALE_MS) void lms.refresh();

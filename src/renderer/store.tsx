@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import type { DownloadEvent, KurowserApi, Settings, Snapshot } from "../shared/types";
+import type { DownloadEvent, KurowserApi, PaneState, Settings, Snapshot } from "../shared/types";
 import { toData, type Assignment, type Data, type FileItem, type Lecture } from "./data";
 
 declare global {
@@ -23,6 +23,8 @@ interface Store {
   snapshot: Snapshot;
   data: Data;
   settings: Settings | null;
+  /** The school page the main process shows left of the chat; the renderer only draws its bar. */
+  pane: PaneState;
   watched: Set<string>;
   read: Set<string>;
   opened: Set<string>;
@@ -49,6 +51,7 @@ interface Store {
 const StoreContext = createContext<Store | null>(null);
 
 const EMPTY: Snapshot = { phase: "loading", error: null, courses: [], assignments: [], lectures: [], recordings: [], notices: [], files: [], pending: [], reminders: [], fetchedAt: null };
+const PANE_CLOSED: PaneState = { open: false, wide: false, title: "", canGoBack: false };
 
 function readTheme(): Theme {
   const saved = localStorage.getItem("theme");
@@ -58,6 +61,7 @@ function readTheme(): Theme {
 export function StoreProvider({ children }: { children: ReactNode }) {
   const [snapshot, setSnapshot] = useState<Snapshot>(EMPTY);
   const [settings, setSettings] = useState<Settings | null>(null);
+  const [pane, setPane] = useState<PaneState>(PANE_CLOSED);
   const [watched, setWatched] = useState(() => new Set<string>());
   const [localRead, setLocalRead] = useState(() => new Set<string>());
   const [opened, setOpened] = useState(() => new Set<string>());
@@ -70,7 +74,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     void api().snapshot().then(setSnapshot);
     void api().settings().then(setSettings);
+    void api().paneState().then(setPane);
     const offSnapshot = api().onSnapshot(setSnapshot);
+    // The AI connects in the background after login; settings change without the student doing anything.
+    const offSettings = api().onSettings(setSettings);
+    const offPane = api().onPane(setPane);
     const offDownload = api().onDownload((e: DownloadEvent) => {
       if (e.kind === "progress") {
         setJobs((prev) =>
@@ -83,6 +91,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     });
     return () => {
       offSnapshot();
+      offSettings();
+      offPane();
       offDownload();
     };
   }, []);
@@ -181,6 +191,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     snapshot,
     data,
     settings,
+    pane,
     watched,
     read,
     opened,
