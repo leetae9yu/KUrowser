@@ -56,6 +56,7 @@ const lmsCache = new DiskCache<LmsCache>(join(app.getPath("userData"), "lms-cach
 const pane = new SchoolPane(
   () => mainWindow,
   (state) => send("pane", state),
+  (event) => send("focus", event),
 );
 let aiAttempted = false;
 const sitesCache = new DiskCache<SitesCache>(join(app.getPath("userData"), "sites-cache.json"), 1);
@@ -413,6 +414,7 @@ function registerIpc(): void {
   handle("paneBack", () => pane.back());
   handle("paneClose", () => pane.close());
   handle("paneWiden", () => pane.widen());
+  handle("paneFocus", () => pane.toggleFocus());
   handle("interpret", async (text: unknown): Promise<{ via: "ai"; command: ReadCommand } | null> => {
     if (typeof text !== "string" || !text.trim() || !gateway.connected) return null;
     const courses = lms.snapshot().courses.map((c) => c.name);

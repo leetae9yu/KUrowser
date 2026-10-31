@@ -147,7 +147,12 @@ export interface PaneState {
   wide: boolean;
   title: string;
   canGoBack: boolean;
+  /** Focus mode on the page shown: null when no rule knows the page, so it stays as the school drew it. */
+  focus: "on" | "off" | null;
 }
+
+/** A line focus mode adds to the chat: the next step on the school page, or a finished job. */
+export type FocusEvent = { kind: "hint"; text: string } | { kind: "done"; text: string };
 
 export interface Settings {
   notifyDue: boolean;
@@ -206,6 +211,8 @@ export interface KurowserApi {
   paneBack(): Promise<void>;
   paneClose(): Promise<void>;
   paneWiden(): Promise<void>;
+  paneFocus(): Promise<void>;
+  onFocus(fn: (e: FocusEvent) => void): () => void;
   interpret(text: string): Promise<{ via: "ai" | "rules"; command: ReadCommand } | null>;
   chat(text: string): Promise<ChatReply>;
   sttPlan(id: string): Promise<SttPlan>;

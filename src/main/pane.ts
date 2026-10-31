@@ -1,6 +1,7 @@
 import { screen, WebContentsView, type BrowserWindow, type Rectangle, type WebContents } from "electron";
 
-import type { PaneState } from "../shared/types.ts";
+import type { FocusEvent, PaneState } from "../shared/types.ts";
+import { FocusMode } from "./focus.ts";
 import { isAiLoginUrl, isSchoolUrl } from "./hosts.ts";
 import { schoolPreferences } from "./school.ts";
 
@@ -18,10 +19,12 @@ const NOTICE_POPUP_CSS = ".noptice_popup_container { display: none !important; }
 export class SchoolPane {
   private view: WebContentsView | null = null;
   private restore: Rectangle | null = null;
+  private focus: FocusMode | null = null;
 
   constructor(
     private readonly window: () => BrowserWindow | null,
     private readonly onChange: (state: PaneState) => void,
+    private readonly onFocus: (event: FocusEvent) => void = () => undefined,
   ) {}
 
   state(): PaneState {
@@ -32,6 +35,7 @@ export class SchoolPane {
       wide: !!win && win.getContentSize()[0]! >= WIDE_MIN,
       title: wc?.getTitle() || "고려대학교",
       canGoBack: !!wc?.navigationHistory.canGoBack(),
+      focus: this.focus?.matched ? (this.focus.on ? "on" : "off") : null,
     };
   }
 
@@ -51,6 +55,7 @@ export class SchoolPane {
     const view = this.view;
     if (!view) return;
     this.view = null;
+    this.focus = null;
     if (win && !win.isDestroyed()) {
       win.contentView.removeChildView(view);
       if (this.restore && !win.isFullScreen() && !win.isMaximized()) win.setBounds(this.restore);
@@ -58,6 +63,10 @@ export class SchoolPane {
     this.restore = null;
     view.webContents.close();
     this.emit();
+  }
+
+  toggleFocus(): void {
+    this.focus?.toggle();
   }
 
   back(): void {
@@ -100,6 +109,7 @@ export class SchoolPane {
     for (const event of ["did-navigate", "did-navigate-in-page", "page-title-updated"] as const) {
       wc.on(event as "did-navigate", () => this.emit());
     }
+    this.focus = new FocusMode(wc, { say: this.onFocus, done: () => this.close(), changed: () => this.emit() });
     wc.on("did-frame-finish-load", () => {
       if (wc.isDestroyed()) return;
       const js = `if (!document.getElementById('kur-hide-notice')) { const s = document.createElement('style'); s.id = 'kur-hide-notice'; s.textContent = ${JSON.stringify(NOTICE_POPUP_CSS)}; document.head.appendChild(s); }`;

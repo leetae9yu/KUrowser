@@ -56,7 +56,7 @@ const StoreContext = createContext<Store | null>(null);
 
 const EMPTY: Snapshot = { phase: "loading", error: null, courses: [], assignments: [], lectures: [], recordings: [], notices: [], files: [], pending: [], loaded: [], reminders: [], fetchedAt: null };
 const NO_SITES: SitesSnapshot = { portal: { data: { notices: [], schedule: [] }, fetchedAt: null, error: null }, menus: [] };
-const PANE_CLOSED: PaneState = { open: false, wide: false, title: "", canGoBack: false };
+const PANE_CLOSED: PaneState = { open: false, wide: false, title: "", canGoBack: false, focus: null };
 
 function readTheme(): Theme {
   const saved = localStorage.getItem("theme");

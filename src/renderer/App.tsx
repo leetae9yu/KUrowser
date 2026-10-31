@@ -23,6 +23,11 @@ export default function App() {
               <ArrowLeft size={20} aria-hidden="true" />
             </button>
             <p className="pane-title">{pane.title}</p>
+            {pane.focus && (
+              <button type="button" className="btn btn-ghost btn-sm" aria-pressed={pane.focus === "on"} onClick={() => void api().paneFocus()}>
+                {pane.focus === "on" ? "원래 화면" : "집중 모드"}
+              </button>
+            )}
             <button type="button" className="icon-btn" aria-label="학교 화면 닫기" title="닫기" onClick={() => void api().paneClose()}>
               <X size={20} aria-hidden="true" />
             </button>
