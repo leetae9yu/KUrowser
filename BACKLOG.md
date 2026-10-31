@@ -1,0 +1,23 @@
+# BACKLOG
+
+막는 기준(학교 쓰기, 남에게 값 노출, 허용 밖 호스트, 비밀값 유출, 돈)에 걸리지 않아 PR 안에서 고치지 않은 항목입니다.
+
+## 범위에서 뺀 기능
+
+- 시안의 `#/panel`(학교 화면 옆 패널)은 가짜 LMS 화면이라 앱에 넣지 않았습니다. 실제 학교 창 옆에 패널을 붙이는 기능은 따로 만들어야 합니다.
+
+## 엔진
+
+- 숨은 엔진 창은 쓰기 모양 요청(POST, PUT, PATCH, DELETE)을 막습니다. 페이지 이동으로 보내는 LearningX LTI 메뉴 실행(`/learningx/lti/<도구>/course_menu`), Canvas `/login/`, `sso.korea.ac.kr`만 허용합니다. 실계정 출석 탭에서 관찰한 쓰기는 `/learningx/lti/lecture_attendance/course_menu` 하나였습니다.
+- 엔진 파일은 ku-lms-ts(e0216a1)를 복사했습니다. 바꾼 곳은 CDP 연결 인터페이스(`CdpTransport`), 페이지 스크립트 텍스트 import, Bun 전용 API 대체, 자료 폴더 배치(`termFolders`)입니다. 원본 저장소의 수정은 자동으로 들어오지 않습니다.
+
+## PR #1 리뷰에서 나온 비차단 항목
+
+- 창 id가 없는 요청(서비스 워커 등)은 엔진 쓰기 차단을 거치지 않습니다.
+- 숨은 창에서 `alert()`가 CDP 수락 전에 Electron 기본 대화상자를 띄우는지 확인하지 않았습니다.
+- 허용 호스트 검사는 최상위 문서에만 적용됩니다. 학교 페이지가 불러오는 iframe과 하위 자원은 다른 호스트일 수 있습니다. 앱이 직접 보내는 요청은 허용 호스트로만 갑니다.
+- `downloadWithCanvasCookie`는 리다이렉트를 어느 호스트로든 따라갑니다. 쿠키는 Canvas 호스트에만 붙습니다.
+- 엔진의 외부 Chrome 실행, 클립보드, `openBrowser` 코드는 앱에서 쓰지 않지만 복사본에 남아 있습니다.
+- 새로 발급한 Gateway 키를 저장하다 실패하면 키를 잃고, AI 사이트에 쓰지 않는 키가 하나 남습니다.
+- 권한 확인 처리기(`setPermissionCheckHandler`)는 두지 않았습니다. 권한 요청 처리기는 모두 거절합니다.
+- 개발 실행의 학교 쿠키는 암호화되지 않습니다. 그래서 개발 실행은 `KUROWSER_ALLOW_BASIC_TEXT=1`일 때만 로그인 쿠키를 오래 남깁니다.

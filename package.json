@@ -1,0 +1,77 @@
+{
+  "name": "kurowser",
+  "productName": "KUrowser",
+  "version": "0.1.0",
+  "private": true,
+  "description": "고려대 LMS 할 일을 버튼 한두 번으로 끝내는 앱",
+  "author": "leetae9yu",
+  "license": "UNLICENSED",
+  "main": "dist/main/main.js",
+  "scripts": {
+    "build:main": "bun build src/main/main.ts src/main/preload.ts --target=node --format=cjs --outdir=dist/main --external electron",
+    "build:renderer": "vite build",
+    "build": "bun run build:main && bun run build:renderer",
+    "start": "bun run build && electron .",
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.renderer.json",
+    "test": "bun test",
+    "dist:linux": "bun run build && electron-builder --linux AppImage",
+    "dist:mac": "bun run build && electron-builder --mac dmg"
+  },
+  "dependencies": {
+    "entities": "^6.0.0",
+    "lucide-react": "^1.66.0",
+    "pretendard": "^1.3.9",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.2.0",
+    "@types/node": "^24.19.2",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "electron": "45.2.1",
+    "electron-builder": "^26.0.12",
+    "typescript": "^5.9.3",
+    "vite": "^8.3.5"
+  },
+  "build": {
+    "appId": "kr.leetae9yu.kurowser",
+    "productName": "KUrowser",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**",
+      "package.json"
+    ],
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "category": "public.app-category.education",
+      "identity": null
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "Education"
+    },
+    "dmg": {
+      "title": "KUrowser"
+    },
+    "electronFuses": {
+      "runAsNode": false,
+      "enableCookieEncryption": true,
+      "enableNodeOptionsEnvironmentVariable": false,
+      "enableNodeCliInspectArguments": false,
+      "grantFileProtocolExtraPrivileges": false,
+      "onlyLoadAppFromAsar": true,
+      "resetAdHocDarwinSignature": true
+    }
+  },
+  "trustedDependencies": [
+    "electron"
+  ]
+}
