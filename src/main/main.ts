@@ -1,5 +1,5 @@
 import { app, BrowserWindow, ipcMain, net, protocol, safeStorage, shell, type IpcMainInvokeEvent } from "electron";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, normalize, sep } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -176,6 +176,10 @@ function ffmpegPath(): string {
   return app.isPackaged ? join(process.resourcesPath, "ffmpeg", exe) : join(app.getAppPath(), "node_modules", "ffmpeg-static", exe);
 }
 
+/** One summary call to the cheap chat model: about 0.3 credit for the model plus the 5-credit filter fee. */
+const SUMMARY_CREDITS = 6;
+const sttRunning = new Set<string>();
+
 /** Dev runs may cap the audio (KUROWSER_STT_CLIP_SECONDS) so a real-account test spends only a clip's credits. */
 function clipSeconds(): number | undefined {
   const n = Number(!app.isPackaged ? process.env.KUROWSER_STT_CLIP_SECONDS : "");
@@ -187,14 +191,19 @@ async function sttPlan(id: string): Promise<SttPlan> {
   if (!data) return { ok: false, text: "그 강의를 찾지 못했어요" };
   try {
     const media = await resolveMedia(schoolSession(), data);
-    if (media.captionUrls.length) return { ok: true, source: "captions", credits: 0, text: "공식 자막 사용(0크레딧)" };
-    if (!gateway.connected) return { ok: false, source: "stt", text: "고대 AI를 연결하면 자막을 만들 수 있어요" };
+    if (!gateway.connected) return { ok: false, text: "고대 AI를 연결하면 자막과 요약을 만들 수 있어요" };
+    if (media.captionUrls.length) {
+      const remaining = await gateway.credits();
+      const enough = remaining !== null && remaining >= SUMMARY_CREDITS;
+      const text = `공식 자막 사용(0크레딧), 요약 약 ${SUMMARY_CREDITS}크레딧, 남은 크레딧 ${remaining === null ? "확인 못 함" : Math.floor(remaining)}`;
+      return { ok: enough, source: "captions", credits: SUMMARY_CREDITS, remaining, text: enough ? text : `${text}. 크레딧이 모자라서 시작하지 않아요` };
+    }
     const seconds = Math.min(media.duration, clipSeconds() ?? Infinity);
-    const credits = estimateCredits(seconds, STT_SPEED);
+    const credits = estimateCredits(seconds, STT_SPEED) + SUMMARY_CREDITS;
     const remaining = await gateway.credits();
     const minutes = Math.max(1, Math.round(seconds / 60));
     const enough = remaining !== null && remaining >= credits;
-    const text = `STT 사용: 이 강의 ${minutes}분 ≈ ${credits.toFixed(1)}크레딧, 남은 크레딧 ${remaining === null ? "확인 못 함" : Math.floor(remaining)}`;
+    const text = `STT 사용: 이 강의 ${minutes}분 ≈ ${credits.toFixed(1)}크레딧(요약 포함), 남은 크레딧 ${remaining === null ? "확인 못 함" : Math.floor(remaining)}`;
     return { ok: enough, source: "stt", minutes, credits, remaining, text: enough ? text : `${text}. 크레딧이 모자라서 시작하지 않아요` };
   } catch (error) {
     return { ok: false, text: error instanceof Error ? error.message : "강의 정보를 읽지 못했어요" };
@@ -208,6 +217,16 @@ async function sttPlan(id: string): Promise<SttPlan> {
  */
 async function sttRun(id: string): Promise<void> {
   const emit = (e: SttEvent): void => send("stt", e);
+  if (sttRunning.has(id)) return emit({ id, kind: "failed", text: "이 강의는 이미 만드는 중이에요" });
+  sttRunning.add(id);
+  try {
+    await sttRunOnce(id, emit);
+  } finally {
+    sttRunning.delete(id);
+  }
+}
+
+async function sttRunOnce(id: string, emit: (e: SttEvent) => void): Promise<void> {
   const plan = await sttPlan(id);
   if (!plan.ok) return emit({ id, kind: "failed", text: plan.text });
   const rec = lms.snapshot().recordings.find((r) => r.id === id)!;
@@ -228,7 +247,7 @@ async function sttRun(id: string): Promise<void> {
       emit({ id, kind: "progress", text: "강의 음성을 뽑는 중이에요" });
       const audio = join(work, "lecture.mp3");
       await extractAudio(ffmpegPath(), media.mediaUrl, audio, { clipSeconds: clipSeconds(), speed: STT_SPEED, normalize: true });
-      emit({ id, kind: "progress", text: `받아쓰는 중이에요 (약 ${plan.credits?.toFixed(1)}크레딧)` });
+      emit({ id, kind: "progress", text: "받아쓰는 중이에요" });
       const result = await gateway.transcribe(audio, STT_MODEL);
       // Timestamps come back on the sped-up audio; scale them to the lecture's own clock.
       const segments = result.segments.map((s) => ({ ...s, start_ms: Math.round(s.start_ms * STT_SPEED), end_ms: Math.round(s.end_ms * STT_SPEED) }));
@@ -253,7 +272,9 @@ function registerIpc(): void {
     if (typeof id === "string") void sttRun(id);
   });
   handle("openFolder", async (path: unknown) => {
-    if (typeof path === "string" && normalize(path).startsWith(downloadDir())) await shell.openPath(path);
+    if (typeof path !== "string") return;
+    const target = normalize(path);
+    if (target.startsWith(downloadDir() + sep) && existsSync(target) && statSync(target).isDirectory()) await shell.openPath(target);
   });
   handle("chat", (text: unknown): Promise<ChatReply> | ChatReply =>
     typeof text === "string" && text.trim() ? chat(text.trim().slice(0, 300)) : { kind: "error", text: "" },

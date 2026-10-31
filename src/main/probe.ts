@@ -23,10 +23,6 @@ const shape = (url: string): string => {
   }
 };
 
-/**
- * Loads one already-attended lecture's viewer in the hidden engine window without pressing play, logs the shape of
- * every request it makes, and compares that lecture's attendance record before and after. Only shapes are printed.
- */
 async function silenceSeconds(ffmpeg: string, wav: string): Promise<number> {
   const { spawnSync } = await import("node:child_process");
   const p = spawnSync(ffmpeg, ["-hide_banner", "-nostdin", "-i", wav, "-af", "silencedetect=noise=-40dB:d=0.7", "-f", "null", "-"], { encoding: "utf8" });
@@ -147,29 +143,6 @@ async function mediaProbe(session: ElectronBrowserSession): Promise<void> {
       out("attendance_unchanged", JSON.stringify(after?.summary?.attendance_summaries?.[String(item.item_id)]) === before);
       return;
     }
-    out("lecture", { status: summaries[String(item.item_id)]?.attendance_status, itemKeys: Object.keys(summaries[String(item.item_id)] ?? {}) });
-    const wc = session.webContents!;
-    const seen: Raw[] = [];
-    const onMessage = (_e: unknown, method: string, params: Raw): void => {
-      if (method === "Network.requestWillBeSent") seen.push({ m: params.request.method, t: params.type, u: shape(params.request.url) });
-      if (method === "Network.responseReceived" && /video|audio|xml|json|mpegurl/i.test(params.response.mimeType)) seen.push({ mime: params.response.mimeType, u: shape(params.response.url), len: params.response.headers?.["content-length"] ?? params.response.headers?.["Content-Length"] });
-    };
-    wc.debugger.on("message", onMessage);
-    await wc.debugger.sendCommand("Network.enable");
-    await session.goto(String(recording.url)).catch(() => undefined);
-    await new Promise((r) => setTimeout(r, 25_000));
-    const frames = wc.mainFrame.framesInSubtree.map((f) => shape(f.url));
-    const videos = await Promise.all(
-      wc.mainFrame.framesInSubtree.map((f) =>
-        f.executeJavaScript("[...document.querySelectorAll('video,source')].map(v=>({src:v.currentSrc||v.src||v.getAttribute('src')||'',paused:v.paused,dur:v.duration}))").catch(() => []),
-      ),
-    );
-    wc.debugger.removeListener("message", onMessage);
-    out("frames", frames);
-    out("videos", (videos.flat() as Raw[]).map((v) => ({ src: shape(String(v.src)), paused: v.paused, dur: v.dur })));
-    out("requests", seen.slice(0, 150));
-    const after = await session.fetchAttendance(course.id).catch(() => null);
-    out("attendance_unchanged", JSON.stringify(after?.summary?.attendance_summaries?.[String(item.item_id)]) === before);
     return;
   }
   out("error", "no attended commons lecture with a module page");

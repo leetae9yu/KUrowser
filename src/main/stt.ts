@@ -50,6 +50,7 @@ export async function resolveMedia(ses: Session, data: ContentData): Promise<Lec
   if (view.protocol !== "https:" || !isSchoolHost(view.hostname)) throw new Error("강의 콘텐츠 주소가 학교 주소가 아니에요");
   const res = await ses.fetch(`${view.origin}/viewer/ssplayer/uniplayer_support/content.php?content_id=${encodeURIComponent(String(data.content_id ?? ""))}`, {
     credentials: "include",
+    redirect: "error",
   });
   if (res.status !== 200) throw new Error(`강의 정보를 받지 못했어요 (HTTP ${res.status})`);
   const xml = await res.text();
