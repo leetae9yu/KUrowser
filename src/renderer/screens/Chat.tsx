@@ -67,7 +67,7 @@ export function Chat({ active }: { active: boolean }) {
   const asked = messages.some((m) => m.from === "user");
   const count = messages.length + (busy ? 1 : 0);
   const seen = useRef(0);
-  const queued = useRef<string | null>(null);
+  const queued = useRef<string[]>([]);
 
   useLayoutEffect(() => {
     const thread = threadRef.current;
@@ -108,6 +108,7 @@ export function Chat({ active }: { active: boolean }) {
   const waiting = (rules: Parsed): boolean => {
     const snap = latest.current.snapshot;
     if (rules.kind === "theme" || rules.kind === "navigate") return false;
+    if (snap.phase === "error") return false;
     if (snap.phase !== "ready") return true;
     if (rules.kind === "recordings") return snap.pending.includes("lectures");
     const c = rules.command.command;
@@ -117,10 +118,10 @@ export function Chat({ active }: { active: boolean }) {
   };
 
   useEffect(() => {
-    const text = queued.current;
+    const text = queued.current[0];
     if (!text || busy) return;
     if (waiting(parseRules(text, store.data))) return;
-    queued.current = null;
+    queued.current = queued.current.slice(1);
     void send(text, false);
   });
 
@@ -130,7 +131,7 @@ export function Chat({ active }: { active: boolean }) {
     const s = latest.current;
     const rules = parseRules(text, s.data);
     if (waiting(rules)) {
-      queued.current = text;
+      queued.current = [...queued.current, text];
       const login = s.snapshot.phase === "login" || s.snapshot.phase === "keychain";
       push({ from: "app", kind: "text", text: login ? "학교 로그인이 끝나면 이어서 할게요" : "아직 불러오는 중이에요. 끝나면 이어서 할게요", tone: "plain" });
       return;
