@@ -52,6 +52,30 @@ export interface FileItem {
   isNew: boolean;
 }
 
+/** A recorded lecture (watched or not) whose subtitles and summary the app can make. */
+export interface Recording {
+  id: string;
+  courseId: string;
+  title: string;
+  week: number | null;
+  seconds: number;
+  watched: boolean;
+}
+
+export interface SttPlan {
+  ok: boolean;
+  text: string;
+  source?: "captions" | "stt";
+  minutes?: number;
+  credits?: number;
+  remaining?: number | null;
+}
+
+export type SttEvent =
+  | { id: string; kind: "progress"; text: string }
+  | { id: string; kind: "done"; text: string; summary: string; folder: string }
+  | { id: string; kind: "failed"; text: string };
+
 export type LoadPart = "courses" | "lectures" | "files";
 
 export interface Snapshot {
@@ -61,12 +85,20 @@ export interface Snapshot {
   courses: Course[];
   assignments: Assignment[];
   lectures: Lecture[];
+  recordings: Recording[];
   notices: Notice[];
   files: FileItem[];
   /** Parts still loading in the background; the first screen does not wait for them. */
   pending: LoadPart[];
   reminders: string[];
   fetchedAt: string | null;
+}
+
+export interface PaneState {
+  open: boolean;
+  wide: boolean;
+  title: string;
+  canGoBack: boolean;
 }
 
 export interface Settings {
@@ -91,6 +123,15 @@ export type ReadCommand =
   | { command: "courses" }
   | { command: "unknown" };
 
+/** What the main process made of a sentence the local rules could not place. */
+export type ChatReply =
+  | { kind: "command"; command: ReadCommand }
+  | { kind: "opened"; text: string }
+  | { kind: "answer"; text: string }
+  | { kind: "clarify"; text: string }
+  | { kind: "refused"; text: string }
+  | { kind: "error"; text: string };
+
 export interface KurowserApi {
   snapshot(): Promise<Snapshot>;
   refresh(): Promise<void>;
@@ -111,5 +152,16 @@ export interface KurowserApi {
   setNotifyDue(on: boolean): Promise<Settings>;
   connectAi(): Promise<{ ok: boolean; text: string }>;
   onAiStatus(fn: (text: string) => void): () => void;
+  onSettings(fn: (s: Settings) => void): () => void;
+  paneState(): Promise<PaneState>;
+  onPane(fn: (s: PaneState) => void): () => void;
+  paneBack(): Promise<void>;
+  paneClose(): Promise<void>;
+  paneWiden(): Promise<void>;
   interpret(text: string): Promise<{ via: "ai" | "rules"; command: ReadCommand } | null>;
+  chat(text: string): Promise<ChatReply>;
+  sttPlan(id: string): Promise<SttPlan>;
+  sttRun(id: string): Promise<void>;
+  onStt(fn: (e: SttEvent) => void): () => void;
+  openFolder(path: string): Promise<void>;
 }

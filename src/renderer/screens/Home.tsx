@@ -1,13 +1,11 @@
-import { ArrowDown, ArrowLeft, ArrowUp, Check, LoaderCircle, LogIn, RefreshCw, Search, Sparkles } from "lucide-react";
+import { ArrowDown, ArrowUp, Check, LoaderCircle, LogIn, RefreshCw, Sparkles } from "lucide-react";
 import { useEffect, useRef, useState, type TouchEvent } from "react";
-import type { Outcome } from "../commands";
-import { CommandInput, useRunner } from "../components/CommandInput";
-import { ResultCard, Summary } from "../components/ResultCard";
-import { courseOf, suggestionsFor } from "../data";
+import { Summary } from "../components/ResultCard";
+import { courseOf } from "../data";
 import { api, jobFor, settled, useStore } from "../store";
 import { useTasks, type Task } from "../tasks";
 
-type Mode = "tasks" | "ask" | "result" | "batch";
+type Mode = "tasks" | "batch";
 
 const DONE_MS = 1100;
 
@@ -36,16 +34,13 @@ function DoneScreen({ line }: { line: string }) {
   );
 }
 
-export function Home() {
+/** The task stage, shown as the first reply in the thread. `active` is false while Settings covers the chat. */
+export function Home({ active }: { active: boolean }) {
   const store = useStore();
   const { jobs, snapshot } = store;
-  const suggestions = suggestionsFor(store.data);
   const [ranDone, setRanDone] = useState(() => new Set<string>());
-  const [thinking, setThinking] = useState(false);
   const tasks = useTasks();
-  const runner = useRunner();
   const [mode, setMode] = useState<Mode>("tasks");
-  const [outcome, setOutcome] = useState<Outcome | null>(null);
   const [cursor, setCursor] = useState<string | null>(null);
   const [finishing, setFinishing] = useState<{ line: string; nextId: string | null } | null>(null);
   const [waiting, setWaiting] = useState<Task | null>(null);
@@ -112,7 +107,7 @@ export function Home() {
     return () => window.clearTimeout(t);
   }, [finishing]);
 
-  // Keyboard focus follows the screen: the new screen's heading takes focus (the ask screen focuses its input).
+  // Keyboard focus follows the screen: the new screen's heading takes focus, unless the student is typing in the composer.
   const screenKey = `${mode}:${showIntro}:${finishing ? "done" : current?.id ?? "empty"}:${batch ? batch.step >= batch.items.length : ""}`;
   const firstScreen = useRef(true);
   useEffect(() => {
@@ -120,7 +115,8 @@ export function Home() {
       firstScreen.current = false;
       return;
     }
-    if (mode === "ask") return;
+    const focused = document.activeElement;
+    if (focused && focused !== document.body && !stageRef.current?.contains(focused)) return;
     const heading = stageRef.current?.querySelector<HTMLElement>(".hero-title");
     if (heading) {
       heading.tabIndex = -1;
@@ -160,21 +156,11 @@ export function Home() {
   }, [batch, jobs, ranDone, store.downloaded]);
 
   useEffect(() => {
+    if (!active || mode !== "tasks") return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && mode !== "tasks" && mode !== "batch") {
-        setMode("tasks");
-        return;
-      }
-      if (mode === "batch") return;
       const target = e.target as HTMLElement;
       if (target.tagName === "INPUT") return;
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
-        e.preventDefault();
-        setMode("ask");
-      } else if (e.key === "/") {
-        e.preventDefault();
-        setMode("ask");
-      } else if (mode === "tasks" && !finishing && !showIntro && !waiting && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
+      if (!finishing && !showIntro && !waiting && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
         e.preventDefault();
         move(e.key === "ArrowDown" ? 1 : -1);
       }
@@ -182,19 +168,6 @@ export function Home() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   });
-
-  const run = async (text: string) => {
-    setThinking(true);
-    const result = await runner(text).finally(() => setThinking(false));
-    if (result.kind === "navigate") return;
-    if (result.kind === "theme") {
-      store.showToast(result.title);
-      setMode("tasks");
-      return;
-    }
-    setOutcome(result);
-    setMode("result");
-  };
 
   const onTouchStart = (e: TouchEvent) => {
     touchY.current = e.touches[0].clientY;
@@ -205,20 +178,6 @@ export function Home() {
     touchY.current = null;
     if (Math.abs(dy) > 60 && mode === "tasks" && !finishing && !showIntro && !waiting) move(dy < 0 ? 1 : -1);
   };
-
-  const back = (
-    <button type="button" className="btn btn-ghost back" onClick={() => setMode("tasks")}>
-      <ArrowLeft size={18} aria-hidden="true" />
-      <span>할 일로 돌아가기</span>
-    </button>
-  );
-
-  const askEntry = (
-    <button type="button" className="ask-entry" onClick={() => setMode("ask")}>
-      <Search size={18} aria-hidden="true" />
-      <span>다른 게 필요하면 한 문장으로 말해 주세요</span>
-    </button>
-  );
 
   const pendingNote = snapshot.pending.length ? (
     <p className="hero-sub">
@@ -285,50 +244,6 @@ export function Home() {
             <span>다시 시도</span>
           </button>
         </div>
-      </div>
-    );
-  } else if (mode === "ask") {
-    screen = (
-      <div className="stage-body stage-top">
-        {back}
-        <h1 className="hero-title">{thinking ? "알아보는 중이에요" : "무엇을 할까요?"}</h1>
-        <CommandInput
-          id="ask-input"
-          label="한 문장으로 말하기"
-          placeholder="예: 이번 주 마감 뭐 있어"
-          size="lg"
-          shortcuts
-          autoFocus
-          onRun={(text) => void run(text)}
-        />
-        <ul className="say-list" aria-label="이렇게 말해 보세요">
-          {suggestions.map((s) => (
-            <li key={s}>
-              <button type="button" className="say" disabled={thinking} onClick={() => void run(s)}>
-                {s}
-              </button>
-            </li>
-          ))}
-        </ul>
-      </div>
-    );
-  } else if (mode === "result" && outcome) {
-    screen = (
-      <div className="stage-body stage-top">
-        {back}
-        <ResultCard outcome={outcome} onRun={(text) => void run(text)} onBack={() => setMode("tasks")} />
-        {outcome.kind === "unknown" && (
-          <ul className="say-list">
-            {suggestions.map((s) => (
-              <li key={s}>
-                <button type="button" className="say" disabled={thinking} onClick={() => void run(s)}>
-                  {s}
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-        {askEntry}
       </div>
     );
   } else if (mode === "batch" && batch) {
@@ -458,7 +373,6 @@ export function Home() {
             하나씩 할게요
           </button>
         </div>
-        {askEntry}
       </div>
     );
   } else if (!current) {
@@ -469,7 +383,6 @@ export function Home() {
         </span>
         <h1 className="hero-title">{snapshot.pending.length ? "지금까지는 할 일이 없어요" : "오늘 할 거 다 했어요"}</h1>
         {pendingNote ?? <p className="hero-sub">새로 생기면 여기에 바로 보여 드릴게요.</p>}
-        {askEntry}
       </div>
     );
   } else {
@@ -516,7 +429,6 @@ export function Home() {
             </button>
           )}
         </div>
-        {askEntry}
       </div>
     );
   }

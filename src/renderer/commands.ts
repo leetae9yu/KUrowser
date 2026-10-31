@@ -1,5 +1,5 @@
 import type { ReadCommand } from "../shared/types";
-import type { Assignment, Course, Data, FileItem, Lecture, Notice } from "./data";
+import type { Assignment, Course, Data, FileItem, Lecture, Notice, Recording } from "./data";
 import { addDays, today0, weekStart } from "./format";
 import type { Route } from "./router";
 import type { Theme } from "./store";
@@ -11,6 +11,7 @@ export type Outcome =
   | { kind: "download"; title: string; files: FileItem[]; start: boolean }
   | { kind: "course"; title: string; course: Course }
   | { kind: "courses"; title: string }
+  | { kind: "recordings"; title: string; items: Recording[] }
   | { kind: "navigate"; title: string; route: Route }
   | { kind: "theme"; title: string; theme: Theme }
   | { kind: "unknown"; title: string };
@@ -23,6 +24,7 @@ export interface Snapshot {
 
 export type Parsed =
   | { kind: "read"; command: ReadCommand; start?: boolean }
+  | { kind: "recordings"; course?: string }
   | { kind: "theme"; theme: Theme; title: string }
   | { kind: "navigate"; route: Route; title: string };
 
@@ -47,6 +49,10 @@ export function parseRules(raw: string, data: Data): Parsed {
   if (has(s, "다크", "어둡", "어두운", "밤모드")) return { kind: "theme", theme: "dark", title: "어두운 화면으로 바꿨어요" };
   if (has(s, "라이트", "밝게", "밝은")) return { kind: "theme", theme: "light", title: "밝은 화면으로 바꿨어요" };
   if (has(s, "설정", "계정", "api", "로그아웃", "ai연결")) return { kind: "navigate", route: { name: "settings" }, title: "설정을 열었어요" };
+  // "받아쓰기" contains "받아", so this sits before the download rule; lecture notes (강의안, 자료) stay files.
+  if (has(s, "자막", "요약", "받아쓰기", "정리") && has(s, "강의", "녹화", "인강") && !has(s, "자료", "강의안", "슬라이드", "파일")) {
+    return { kind: "recordings", course };
+  }
   if (has(s, "받아", "다운", "저장해", "내려받")) return { kind: "read", command: { command: "files", course, onlyNew: has(s, "새", "최신", "이번주") }, start: true };
   if (has(s, "자료", "파일", "강의안", "슬라이드")) return { kind: "read", command: { command: "files", course, onlyNew: has(s, "새", "최신") } };
   if (has(s, "마감", "과제", "숙제", "할일", "해야", "제출", "due", "일정", "캘린더", "달력", "타임라인")) {
@@ -74,6 +80,14 @@ function rangeDates(range: Extract<ReadCommand, { command: "deadlines" }>["range
     case "week":
       return { from: now, to: addDays(today0, 8), label: "앞으로 7일" };
   }
+}
+
+/** Recorded lectures, newest week first, for the subtitles+summary card. */
+export function recordingsOutcome(data: Data, courseName?: string): Outcome {
+  const course = courseName ? data.courses.find((c) => c.name === courseName) : undefined;
+  const scope = course ? `${course.name} ` : "";
+  const items = data.recordings.filter((r) => !course || r.courseId === course.id).sort((a, b) => (b.week ?? -1) - (a.week ?? -1));
+  return { kind: "recordings", title: items.length ? `${scope}녹화 강의 ${items.length}개, 최근 주차부터예요` : `${scope}녹화 강의가 없어요`, items };
 }
 
 export function outcomeFor(command: ReadCommand, data: Data, snap: Snapshot, start = false): Outcome {
@@ -126,6 +140,6 @@ export function outcomeFor(command: ReadCommand, data: Data, snap: Snapshot, sta
     case "courses":
       return { kind: "courses", title: `이번 학기 과목 ${data.courses.length}개` };
     case "unknown":
-      return { kind: "unknown", title: "아직 이 문장은 이해하지 못해요. 아래 추천 문장처럼 말해 보세요." };
+      return { kind: "unknown", title: "아직 이 문장은 이해하지 못해요. 고대 AI를 연결하면 더 많은 문장을 알아들어요." };
   }
 }

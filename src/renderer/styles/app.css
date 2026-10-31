@@ -82,12 +82,17 @@ button {
 }
 
 .main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
   min-height: 0;
-  overflow-y: auto;
 }
 
-.app-panel .main {
-  overflow: hidden;
+.main > .page {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  overflow-y: auto;
 }
 
 /* ---------- stage: one thing per screen ---------- */
@@ -182,26 +187,6 @@ button {
   margin-top: auto;
   padding: var(--space-8) 0 max(var(--space-2), env(safe-area-inset-bottom));
   background: linear-gradient(to bottom, transparent, var(--bg) var(--space-6));
-}
-
-.ask-entry {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  width: 100%;
-  min-height: 48px;
-  margin-top: var(--space-4);
-  padding: 0 var(--space-4);
-  background: var(--bg-wash);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-pill);
-  color: var(--text-2);
-  font-size: var(--text-md);
-  text-align: left;
-}
-
-.ask-entry:hover {
-  background: var(--bg-hover);
 }
 
 .back {
@@ -331,29 +316,14 @@ button {
   animation: spin 900ms linear infinite;
 }
 
-/* ask and result */
-.say-list {
-  list-style: none;
-  margin: var(--space-5) 0 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.say {
-  width: 100%;
-  min-height: 52px;
-  padding: 0 var(--space-4);
-  border: 0;
-  border-radius: var(--radius-lg);
-  background: transparent;
-  font-size: var(--text-lg);
-  text-align: left;
-}
-
-.say:hover {
-  background: var(--bg-hover);
+/* result cards */
+.result-title {
+  margin: 0;
+  text-wrap: balance;
+  font-size: var(--text-xl);
+  font-weight: var(--weight-bold);
+  line-height: var(--leading-tight);
+  letter-spacing: -0.01em;
 }
 
 .result-body {
@@ -420,7 +390,7 @@ button {
   color: var(--text-2);
 }
 
-/* ---------- command input ---------- */
+/* ---------- command input (the composer; layout in chat.css) ---------- */
 .command-form {
   display: flex;
   align-items: center;
@@ -434,27 +404,6 @@ button {
 .command-form:focus-within {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-wash);
-}
-
-.command-lg {
-  height: 60px;
-  margin-top: var(--space-5);
-  border-radius: var(--radius-xl);
-}
-
-.command-lg .command-input {
-  font-size: var(--text-xl);
-}
-
-.command-sm {
-  height: 44px;
-  margin-top: var(--space-2);
-  border-radius: var(--radius-md);
-}
-
-.command-icon {
-  flex: none;
-  color: var(--text-2);
 }
 
 .command-input {
@@ -1035,6 +984,11 @@ button {
   gap: var(--space-4);
   min-height: 48px;
   padding: var(--space-2) 0;
+}
+
+.setting-row > div {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .setting-label {

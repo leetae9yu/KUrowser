@@ -1,6 +1,6 @@
-import type { Course, Snapshot } from "../shared/types";
+import type { Course, Recording, Snapshot } from "../shared/types";
 
-export type { Course };
+export type { Course, Recording };
 export type CourseId = string;
 
 export interface Assignment {
@@ -47,6 +47,7 @@ export interface Data {
   courseById: Record<CourseId, Course>;
   assignments: Assignment[];
   lectures: Lecture[];
+  recordings: Recording[];
   notices: Notice[];
   files: FileItem[];
 }
@@ -59,6 +60,7 @@ export function toData(s: Snapshot): Data {
     courseById: Object.fromEntries(s.courses.map((c) => [c.id, c])),
     assignments: s.assignments.map((a) => ({ ...a, due: new Date(a.due) })),
     lectures: s.lectures.map((l) => ({ id: l.id, courseId: l.courseId, week: l.week, title: l.title, until: date(l.until) })),
+    recordings: s.recordings,
     notices: s.notices.map((n) => ({ ...n, postedAt: new Date(n.postedAt) })),
     files: s.files.map((f) => ({ ...f, postedAt: date(f.updatedAt) })),
   };
@@ -76,6 +78,7 @@ export function suggestionsFor(data: Data): string[] {
     "이번 주 마감 뭐 있어",
     first ? `${first} 자료 다 받아줘` : "새 자료 다 받아줘",
     "안 본 강의 몇 개야",
+    "녹화강의 요약해줘",
     "공지 요약해줘",
     data.courses[1] ? `${data.courses[1].name} 열어줘` : "과목 전체 보기",
     "과목 전체 보기",

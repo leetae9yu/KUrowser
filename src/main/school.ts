@@ -1,7 +1,7 @@
-import { app, BrowserWindow, safeStorage, screen, session, type Session } from "electron";
+import { app, BrowserWindow, safeStorage, session, type Session, type WebContents } from "electron";
 
 import { CANVAS_ORIGIN, DEFAULT_ENTRY_URL } from "../engine/live.ts";
-import { engineRequestAllowed, isAiLoginUrl, isAllowedPage, isSchoolHost, isSchoolUrl } from "./hosts.ts";
+import { engineRequestAllowed, isAiLoginUrl, isAllowedPage, isSchoolHost } from "./hosts.ts";
 
 export const PARTITION = "persist:kurowser";
 const LOGIN_TIMEOUT_MS = 10 * 60 * 1000;
@@ -32,15 +32,7 @@ export function schoolSession(): Session {
   return ses;
 }
 
-function guardWindow(win: BrowserWindow): void {
-  win.webContents.setWindowOpenHandler(({ url }) => {
-    if (!isSchoolUrl(url)) return { action: "deny" };
-    return { action: "allow", overrideBrowserWindowOptions: { webPreferences: schoolPreferences() } };
-  });
-  win.webContents.on("did-create-window", (child) => guardWindow(child));
-}
-
-function schoolPreferences(): Electron.WebPreferences {
+export function schoolPreferences(): Electron.WebPreferences {
   return { session: schoolSession(), sandbox: true, contextIsolation: true, nodeIntegration: false };
 }
 
@@ -56,22 +48,6 @@ export function makeEngineWindow(): BrowserWindow {
   win.on("closed", () => engineContents.delete(id));
   win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   win.webContents.setAudioMuted(true);
-  return win;
-}
-
-export function openSchoolWindow(url: string, parent?: BrowserWindow): BrowserWindow | null {
-  if (!isSchoolUrl(url)) return null;
-  // The SSO page's notice popup is about 1400px wide; a narrower window hides its close button.
-  const area = screen.getPrimaryDisplay().workAreaSize;
-  const win = new BrowserWindow({
-    width: Math.min(1440, area.width),
-    height: Math.min(900, area.height),
-    parent,
-    title: "고려대학교",
-    webPreferences: schoolPreferences(),
-  });
-  guardWindow(win);
-  void win.loadURL(url).catch(() => undefined);
   return win;
 }
 
@@ -122,17 +98,17 @@ export async function keepLogin(ses: Session = schoolSession()): Promise<void> {
   await ses.cookies.flushStore();
 }
 
-export function signIn(parent?: BrowserWindow): Promise<boolean> {
-  const win = openSchoolWindow(DEFAULT_ENTRY_URL, parent);
-  if (!win) return Promise.resolve(false);
-  win.setTitle("고려대학교 로그인");
+/** Signs in on the school page beside the chat; the page closes once Canvas answers for the student. */
+export function signIn(pane: { open(url: string): WebContents | null; close(): void }): Promise<boolean> {
+  const wc = pane.open(DEFAULT_ENTRY_URL);
+  if (!wc) return Promise.resolve(false);
   return new Promise((resolve) => {
     let done = false;
     const finish = (ok: boolean): void => {
       if (done) return;
       done = true;
       clearTimeout(timer);
-      if (!win.isDestroyed()) win.close();
+      if (ok) pane.close();
       resolve(ok);
     };
     const timer = setTimeout(() => finish(false), LOGIN_TIMEOUT_MS);
@@ -145,9 +121,9 @@ export function signIn(parent?: BrowserWindow): Promise<boolean> {
         finish(true);
       });
     };
-    win.webContents.on("did-navigate", check);
-    win.webContents.on("did-navigate-in-page", check);
-    win.on("closed", () => finish(false));
+    wc.on("did-navigate", check);
+    wc.on("did-navigate-in-page", check);
+    wc.on("destroyed", () => finish(false));
   });
 }
 

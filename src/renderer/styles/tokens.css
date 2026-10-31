@@ -77,7 +77,11 @@
   --stage-max: 460px;
   --side-w: 400px;
   --row-min-h: 52px;
-  --appbar-h: 56px;
+  /* 48px matches the bar the main process leaves above the school page */
+  --appbar-h: 48px;
+  --pane-bar-h: 48px;
+  --chat-w: 420px;
+  --chat-max: 560px;
 
   /* motion */
   --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);

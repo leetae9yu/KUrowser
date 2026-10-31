@@ -28,7 +28,18 @@ const api: KurowserApi = {
   setNotifyDue: (on) => ipcRenderer.invoke("setNotifyDue", on),
   connectAi: () => ipcRenderer.invoke("connectAi"),
   onAiStatus: (fn) => listen("aiStatus", fn),
+  onSettings: (fn) => listen("settings", fn),
+  paneState: () => ipcRenderer.invoke("paneState"),
+  onPane: (fn) => listen("pane", fn),
+  paneBack: () => ipcRenderer.invoke("paneBack"),
+  paneClose: () => ipcRenderer.invoke("paneClose"),
+  paneWiden: () => ipcRenderer.invoke("paneWiden"),
   interpret: (text) => ipcRenderer.invoke("interpret", text),
+  chat: (text) => ipcRenderer.invoke("chat", text),
+  sttPlan: (id) => ipcRenderer.invoke("sttPlan", id),
+  sttRun: (id) => ipcRenderer.invoke("sttRun", id),
+  onStt: (fn) => listen("stt", fn),
+  openFolder: (path) => ipcRenderer.invoke("openFolder", path),
 };
 
 contextBridge.exposeInMainWorld("kurowser", api);

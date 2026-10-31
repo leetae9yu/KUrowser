@@ -1,4 +1,4 @@
-import { app, BrowserWindow, net, safeStorage, type Session } from "electron";
+import { app, BrowserWindow, net, safeStorage, type Session, type WebContents } from "electron";
 import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
@@ -9,11 +9,14 @@ import { schoolSession } from "./school.ts";
 export const SITE = "https://llm.korea.ac.kr";
 export const GATEWAY = "https://api.baze.co/v1/gateway";
 const SITE_HEADERS: Readonly<Record<string, string>> = { subdomain: "llm", "x-access-channel": "web", accept: "application/json" };
-const NOTICE_POPUP_CSS = ".noptice_popup_container { display: none !important; }";
 const LOGIN_TIMEOUT_MS = 10 * 60 * 1000;
-const PREFERRED_MODELS = [/gpt-4\.1-mini/i, /gpt-4o-mini/i, /mini/i, /flash/i, /haiku/i];
+// Right after the LMS sign-in the portal session is still valid, so the AI site signs in by itself within seconds.
+const SILENT_LOGIN_MS = 25 * 1000;
+// gpt-5.6-luna is the only cheap model measured on the bench pilot (0.21 credit a call plus the 5-credit filter fee).
+const PREFERRED_MODELS = [/^gpt-5\.6-luna$/, /flash-lite/i, /haiku/i, /mini/i, /flash/i];
 
 type Status = (text: string) => void;
+export type Opener = { open(url: string): WebContents | null; close(): void };
 type Verify = { ok: true; models: string[] } | { ok: false; rejected: boolean; status: number };
 
 class IssueUncertainError extends Error {}
@@ -88,31 +91,22 @@ function issuedKey(body: unknown): string | null {
   return data.key;
 }
 
-function openAiLogin(ses: Session, parent: BrowserWindow | null): BrowserWindow {
+function hiddenAiLogin(ses: Session): BrowserWindow {
   const win = new BrowserWindow({
-    width: 1100,
-    height: 820,
-    parent: parent ?? undefined,
-    title: "고려대학교 로그인",
+    show: false,
     webPreferences: { session: ses, contextIsolation: true, nodeIntegration: false, sandbox: true },
   });
   win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  win.webContents.setAudioMuted(true);
   const guard = (event: Electron.Event, url: string): void => {
     if (!isAiLoginUrl(url)) event.preventDefault();
   };
   win.webContents.on("will-navigate", guard);
   win.webContents.on("will-redirect", guard);
-  win.webContents.on("did-frame-finish-load", () => {
-    if (win.isDestroyed()) return;
-    const js = `if (!document.getElementById('kur-hide-notice')) { const s = document.createElement('style'); s.id = 'kur-hide-notice'; s.textContent = ${JSON.stringify(NOTICE_POPUP_CSS)}; document.head.appendChild(s); }`;
-    for (const frame of win.webContents.mainFrame.framesInSubtree) {
-      if (frame.url.startsWith("https://sso.korea.ac.kr")) frame.executeJavaScript(js).catch(() => undefined);
-    }
-  });
   return win;
 }
 
-function waitForAiLogin(win: BrowserWindow, ses: Session): Promise<void> {
+function waitForAiLogin(wc: WebContents, ses: Session, timeoutMs: number): Promise<void> {
   return new Promise((resolve, reject) => {
     let done = false;
     const finish = (error?: Error): void => {
@@ -121,42 +115,56 @@ function waitForAiLogin(win: BrowserWindow, ses: Session): Promise<void> {
       clearTimeout(timer);
       error ? reject(error) : resolve();
     };
-    const timer = setTimeout(() => finish(new Error("로그인 대기 시간이 지났어요")), LOGIN_TIMEOUT_MS);
+    const timer = setTimeout(() => finish(new Error("로그인 대기 시간이 지났어요")), timeoutMs);
     const check = (_event: unknown, url: string): void => {
       if (!url.startsWith(`${SITE}/dashboard`)) return;
       void siteFetch(ses, "/api/proxy/members/me").then((r) => r.status === 200 && finish());
     };
-    win.webContents.on("did-navigate", check);
-    win.webContents.on("did-navigate-in-page", check);
-    win.on("closed", () => finish(new Error("로그인 창이 닫혔어요")));
+    wc.on("did-navigate", check);
+    wc.on("did-navigate-in-page", check);
+    wc.on("destroyed", () => finish(new Error("로그인 화면이 닫혔어요")));
   });
 }
 
-async function issueKey(ses: Session, parent: BrowserWindow | null, status: Status): Promise<string> {
-  let win: BrowserWindow | null = null;
+/** Signs in to the AI site with the portal session in a hidden window; only a lapsed session shows the login page. */
+async function aiLogin(ses: Session, opener: Opener, status: Status): Promise<void> {
+  if ((await siteFetch(ses, "/api/proxy/members/me")).status === 200) return;
+  status("고대 AI에 연결하는 중이에요");
+  const hidden = hiddenAiLogin(ses);
   try {
-    if ((await siteFetch(ses, "/api/proxy/members/me")).status !== 200) {
-      status("고려대학교 로그인 창에서 로그인해 주세요");
-      win = openAiLogin(ses, parent);
-      await Promise.all([waitForAiLogin(win, ses), win.loadURL(`${SITE}/auth`).catch(() => undefined)]);
-    }
-    status("키를 받는 중이에요");
-    let res: { status: number; body: unknown };
-    try {
-      res = await siteFetch(ses, "/api/proxy/apikeys/", {
-        method: "POST",
-        body: JSON.stringify({ name: `KUrowser ${hostname()}`.slice(0, 50), description: "KUrowser 앱에서 발급" }),
-      });
-    } catch {
-      throw new IssueUncertainError("발급 응답을 받지 못했어요. 키가 만들어졌을 수 있으니 AI 사이트의 키 목록을 확인해 주세요");
-    }
-    if (res.status < 200 || res.status >= 300) throw new Error(`키 발급이 거절됐어요 (HTTP ${res.status})`);
-    const key = issuedKey(res.body);
-    if (!key) throw new IssueUncertainError("발급 응답에서 키를 찾지 못했어요. AI 사이트의 키 목록을 확인해 주세요");
-    return key;
+    await Promise.all([waitForAiLogin(hidden.webContents, ses, SILENT_LOGIN_MS), hidden.loadURL(`${SITE}/auth`).catch(() => undefined)]);
+    return;
+  } catch {
+    // The portal asked for the password again; the student signs in on the school page instead.
   } finally {
-    if (win && !win.isDestroyed()) win.close();
+    if (!hidden.isDestroyed()) hidden.destroy();
   }
+  status("왼쪽 학교 화면에서 로그인해 주세요");
+  const wc = opener.open(`${SITE}/auth`);
+  if (!wc) throw new Error("로그인 화면을 열지 못했어요");
+  try {
+    await waitForAiLogin(wc, ses, LOGIN_TIMEOUT_MS);
+  } finally {
+    opener.close();
+  }
+}
+
+async function issueKey(ses: Session, opener: Opener, status: Status): Promise<string> {
+  await aiLogin(ses, opener, status);
+  status("키를 받는 중이에요");
+  let res: { status: number; body: unknown };
+  try {
+    res = await siteFetch(ses, "/api/proxy/apikeys/", {
+      method: "POST",
+      body: JSON.stringify({ name: `KUrowser ${hostname()}`.slice(0, 50), description: "KUrowser 앱에서 발급" }),
+    });
+  } catch {
+    throw new IssueUncertainError("발급 응답을 받지 못했어요. 키가 만들어졌을 수 있으니 AI 사이트의 키 목록을 확인해 주세요");
+  }
+  if (res.status < 200 || res.status >= 300) throw new Error(`키 발급이 거절됐어요 (HTTP ${res.status})`);
+  const key = issuedKey(res.body);
+  if (!key) throw new IssueUncertainError("발급 응답에서 키를 찾지 못했어요. AI 사이트의 키 목록을 확인해 주세요");
+  return key;
 }
 
 /** Holds the Gateway key in the main process only; the renderer sees a connected flag and a masked tail. */
@@ -184,7 +192,7 @@ export class GatewayClient {
     return this.key ? `연결됨 (${mask(this.key)})` : "";
   }
 
-  async connect(parent: BrowserWindow | null, status: Status): Promise<string> {
+  async connect(opener: Opener, status: Status): Promise<string> {
     if (this.busy) throw new Error("이미 연결하는 중이에요");
     this.busy = true;
     try {
@@ -200,7 +208,7 @@ export class GatewayClient {
         if (!v.rejected) throw new Error(`지금은 키를 확인할 수 없어요 (HTTP ${v.status})`);
       }
       const ses = schoolSession();
-      const key = await issueKey(ses, parent, status);
+      const key = await issueKey(ses, opener, status);
       await saveKey(key);
       await ses.clearStorageData({ origin: SITE });
       const v = await verifyKey(key);
@@ -222,30 +230,98 @@ export class GatewayClient {
     rmSync(keyFile(), { force: true });
   }
 
-  /** One chat completion. Spends credit, so callers run it only for something the student pressed. */
-  async complete(system: string, user: string, maxTokens = 400): Promise<string> {
+  private async post(path: string, payload: unknown): Promise<unknown> {
     if (!this.key) throw new Error("AI가 연결되어 있지 않아요");
-    if (!this.model) {
-      const v = await verifyKey(this.key);
-      if (!v.ok) throw new Error(`AI 키를 확인할 수 없어요 (HTTP ${v.status})`);
-      this.model = pickModel(v.models);
-      if (!this.model) throw new Error("쓸 수 있는 AI 모델이 없어요");
-    }
-    const res = await net.fetch(`${GATEWAY}/chat/completions`, {
+    const res = await net.fetch(`${GATEWAY}${path}`, {
       method: "POST",
       headers: { Authorization: `Bearer ${this.key}`, "content-type": "application/json" },
-      body: JSON.stringify({
-        model: this.model,
-        max_tokens: maxTokens,
-        temperature: 0,
-        messages: [
-          { role: "system", content: system },
-          { role: "user", content: user },
-        ],
-      }),
+      body: JSON.stringify(payload),
     });
     if (res.status !== 200) throw new Error(`AI 호출이 실패했어요 (HTTP ${res.status})`);
-    const body = (await res.json()) as { choices?: Array<{ message?: { content?: unknown } }> };
+    return res.json();
+  }
+
+  /** The cheap chat model the app talks with; the bench picked it, and a key without it falls back to the preference list. */
+  private async chatModel(): Promise<string> {
+    if (this.model) return this.model;
+    if (!this.key) throw new Error("AI가 연결되어 있지 않아요");
+    const v = await verifyKey(this.key);
+    if (!v.ok) throw new Error(`AI 키를 확인할 수 없어요 (HTTP ${v.status})`);
+    this.model = pickModel(v.models);
+    if (!this.model) throw new Error("쓸 수 있는 AI 모델이 없어요");
+    return this.model;
+  }
+
+  /** One chat completion. Spends credit, so callers run it only for something the student pressed. */
+  async complete(system: string, user: string, maxTokens = 400, model?: string): Promise<string> {
+    const body = (await this.post("/chat/completions", {
+      model: model ?? (await this.chatModel()),
+      max_tokens: maxTokens,
+      temperature: 0,
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: user },
+      ],
+    })) as { choices?: Array<{ message?: { content?: unknown } }> };
     return String(body.choices?.[0]?.message?.content ?? "").trim();
+  }
+
+  /** A Jev decisions call (input tokens only are billed). */
+  decide(request: Record<string, unknown>): Promise<unknown> {
+    return this.post("/decisions/", request);
+  }
+
+  /** Remaining credits of the key's account (free to call); null when the Gateway does not answer. */
+  async credits(): Promise<number | null> {
+    if (!this.key) return null;
+    const res = await net.fetch(`${GATEWAY}/credits/`, { headers: { Authorization: `Bearer ${this.key}` } });
+    if (res.status !== 200) return null;
+    const body = (await res.json()) as { total?: { remaining?: unknown } };
+    return typeof body.total?.remaining === "number" ? body.total.remaining : null;
+  }
+
+  /** Gateway spend of this key grouped by model (free to call). */
+  async usage(from: string): Promise<unknown> {
+    if (!this.key) return null;
+    const res = await net.fetch(`${GATEWAY}/usage/?from=${from}&by=model`, { headers: { Authorization: `Bearer ${this.key}` } });
+    return res.status === 200 ? res.json() : { status: res.status };
+  }
+
+  /**
+   * Starts a Gateway transcription (charged once, at start, by audio length) and polls it every 10 s until it ends.
+   * Callers show the estimate and check the balance first.
+   */
+  async transcribe(file: string, model: string): Promise<{ text: string; segments: Array<{ start_ms: number; end_ms: number; text: string }>; charged: number | null; durationSeconds: number | null }> {
+    if (!this.key) throw new Error("AI가 연결되어 있지 않아요");
+    const auth = { Authorization: `Bearer ${this.key}` };
+    const form = new FormData();
+    form.append("file", new Blob([readFileSync(file)], { type: "audio/mpeg" }), "lecture.mp3");
+    form.append("model", model);
+    form.append("language_hints", "ko");
+    form.append("enable_speaker_diarization", "false");
+    const start = await fetch(`${GATEWAY}/audio/transcriptions/`, { method: "POST", headers: auth, body: form });
+    if (start.status !== 200) throw new Error(`받아쓰기를 시작하지 못했어요 (HTTP ${start.status})`);
+    const job = (await start.json()) as { operation_id?: string; credits_charged?: number; duration_seconds?: number };
+    if (!job.operation_id) throw new Error("받아쓰기 작업 번호를 받지 못했어요");
+    const deadline = Date.now() + 40 * 60 * 1000;
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 10_000));
+      const res = await fetch(`${GATEWAY}/audio/transcriptions/${encodeURIComponent(job.operation_id)}/`, { headers: auth });
+      if (res.status !== 200) continue;
+      const body = (await res.json()) as { status?: string; text?: string; segments?: Array<{ start_ms: number; end_ms: number; text: string }>; error?: string };
+      if (body.status === "failed") throw new Error(`받아쓰기가 실패했어요: ${body.error ?? ""}`);
+      if (body.status === "completed") {
+        return { text: body.text ?? "", segments: body.segments ?? [], charged: job.credits_charged ?? null, durationSeconds: job.duration_seconds ?? null };
+      }
+    }
+    throw new Error("받아쓰기가 너무 오래 걸려요");
+  }
+
+  async models(type?: string): Promise<string[]> {
+    if (!this.key) return [];
+    const res = await net.fetch(`${GATEWAY}/models/${type ? `?type=${encodeURIComponent(type)}` : ""}`, { headers: { Authorization: `Bearer ${this.key}` } });
+    if (res.status !== 200) return [];
+    const body = (await res.json()) as { data?: Array<{ id?: unknown }> };
+    return (body.data ?? []).map((m) => String(m.id ?? "")).filter(Boolean);
   }
 }

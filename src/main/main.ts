@@ -1,29 +1,36 @@
 import { app, BrowserWindow, ipcMain, net, protocol, safeStorage, shell, type IpcMainInvokeEvent } from "electron";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, normalize, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { liveOptions } from "../engine/live.ts";
-import type { DownloadEvent, ReadCommand, Settings, Snapshot } from "../shared/types.ts";
+import { ATTENDANCE_TOOL_ID, CANVAS_ORIGIN, liveOptions } from "../engine/live.ts";
+import { courseFolder } from "../engine/materials.ts";
+import type { ChatReply, DownloadEvent, ReadCommand, Settings, Snapshot, SttEvent, SttPlan } from "../shared/types.ts";
 import { GatewayClient } from "./ai.ts";
 import { devConfig } from "./dev.ts";
 import { ElectronBrowserSession } from "./electron-cdp.ts";
 import { isAiLoginUrl, isAllowedPage, isDownloadHost } from "./hosts.ts";
 import { LmsService } from "./lms.ts";
 import { ReminderScheduler } from "./reminders.ts";
-import { keepLogin, makeEngineWindow, openSchoolWindow, schoolSession, signIn, signOut } from "./school.ts";
-import { COMMAND_PROMPT, SUMMARY_PROMPT, commandUserPrompt, parseCommand, parseSummaries, summaryUserPrompt } from "./sentence.ts";
+import { SchoolPane } from "./pane.ts";
+import { keepLogin, makeEngineWindow, schoolSession, signIn, signOut } from "./school.ts";
+import { COMMAND_PROMPT, SUMMARY_LECTURE_PROMPT, SUMMARY_PROMPT, commandUserPrompt, parseCommand, parseSummaries, summaryUserPrompt } from "./sentence.ts";
+import { CHAT_PROMPT, chatUserPrompt, CLARIFY_PROMPT, commandOf, jevRequest, pageUrl, parseJev, routeUserPrompt } from "./route.ts";
 import { StateStore } from "./state.ts";
+import { captionText, estimateCredits, extractAudio, fetchCaption, resolveMedia, STT_MODEL, STT_SPEED, toSrt } from "./stt.ts";
 
 const APP_ORIGIN = "app://kurowser";
 const DIST_DIR = join(app.getAppPath(), "dist");
 const RENDERER_DIR = join(DIST_DIR, "renderer");
 const STALE_MS = 10 * 60 * 1000;
+/** Below this Jev confidence the app asks back in one sentence instead of acting. */
+const ROUTE_CONFIDENCE = 0.6;
 /** Longer than a normal keychain read; past this the OS is most likely showing an allow prompt. */
 const KEYCHAIN_HINT_MS = 2500;
 
 let mainWindow: BrowserWindow | null = null;
+let gatewayRestored = false;
 
 protocol.registerSchemesAsPrivileged([{ scheme: "app", privileges: { standard: true, secure: true, supportFetchAPI: true } }]);
 
@@ -39,6 +46,11 @@ function downloadDir(): string {
 const store = new StateStore(join(app.getPath("userData"), "state.json"));
 const reminders = new ReminderScheduler(store);
 const gateway = new GatewayClient();
+const pane = new SchoolPane(
+  () => mainWindow,
+  (state) => send("pane", state),
+);
+let aiAttempted = false;
 const lms = new LmsService({
   makeSession: engineSession,
   downloadDir,
@@ -86,15 +98,174 @@ const strings = (value: unknown): string[] => (Array.isArray(value) ? value.filt
 
 function openFromSnapshot(kind: "assignment" | "lecture" | "notice", id: unknown): void {
   const url = typeof id === "string" ? lms.url(kind, id) : null;
-  if (url) openSchoolWindow(url);
+  if (url) pane.open(url);
+}
+
+/**
+ * The first portal sign-in also connects the AI: the AI site uses the same portal login, so the key is issued in
+ * the background without a second login. It runs once per app run, and only when no stored key works.
+ */
+async function connectAi(): Promise<{ ok: boolean; text: string }> {
+  aiAttempted = true;
+  try {
+    const text = await gateway.connect(pane, (status) => send("aiStatus", status));
+    return { ok: true, text };
+  } catch (error) {
+    return { ok: false, text: error instanceof Error ? error.message : "연결하지 못했어요" };
+  } finally {
+    send("settings", settings());
+  }
+}
+
+const when = (iso: string | null): string =>
+  iso ? new Date(iso).toLocaleString("ko-KR", { month: "long", day: "numeric", weekday: "short", hour: "2-digit", minute: "2-digit" }) : "기한 없음";
+
+/** The LMS facts the chat model may use: open work, unwatched lectures, recent notices, new files. */
+function chatContext(): string {
+  const snap = lms.snapshot();
+  const name = new Map(snap.courses.map((c) => [c.id, c.name]));
+  const now = Date.now();
+  const lines = [
+    ...snap.assignments.filter((a) => !a.submitted && Date.parse(a.due) > now).sort((a, b) => a.due.localeCompare(b.due)).slice(0, 10).map((a) => `마감: ${name.get(a.courseId) ?? ""} ${a.title} ${when(a.due)}`),
+    ...snap.lectures.filter((l) => l.available).slice(0, 10).map((l) => `안 본 강의: ${name.get(l.courseId) ?? ""} ${l.title}, 출석 인정 ${when(l.until)}까지`),
+    ...snap.notices.slice(0, 8).map((n) => `공지: ${name.get(n.courseId) ?? ""} '${n.title}' ${n.summary || n.body.replace(/\s+/g, " ").slice(0, 200)}`),
+    ...snap.files.filter((f) => f.isNew && !f.downloaded).slice(0, 8).map((f) => `새 자료: ${name.get(f.courseId) ?? ""} ${f.name}`),
+  ];
+  return [`오늘: ${when(new Date().toISOString())}`, `과목: ${snap.courses.map((c) => c.name).join(", ")}`, ...lines].join("\n");
+}
+
+/**
+ * A sentence the local rules could not place. Jev classifies it in one decisions call; a confident read runs a
+ * read command, a page request opens the school page on the left, a write request is refused with the page to do
+ * it on, and conversation goes to the cheap chat model. Each Gateway call carries a flat filter fee, so a sentence
+ * costs one or two calls at most.
+ */
+async function chat(text: string): Promise<ChatReply> {
+  if (!gateway.connected) return { kind: "error", text: "고대 AI가 아직 연결되지 않았어요" };
+  const snap = lms.snapshot();
+  const courses = snap.courses.map((c) => c.name);
+  const courseId = (n?: string) => snap.courses.find((c) => c.name === n)?.id;
+  try {
+    const route = parseJev(await gateway.decide(jevRequest(text, courses)), courses);
+    if (!route) return { kind: "error", text: "AI 답을 읽지 못했어요" };
+    if (route.kind !== "chat" && route.confidence < ROUTE_CONFIDENCE) {
+      return { kind: "clarify", text: await gateway.complete(CLARIFY_PROMPT, routeUserPrompt(text, courses), 80) };
+    }
+    const open = (): boolean => !!pane.open(pageUrl(CANVAS_ORIGIN, route.topic, courseId(route.course), ATTENDANCE_TOOL_ID));
+    switch (route.kind) {
+      case "write":
+        open();
+        return { kind: "refused", text: "제출, 출석, 글쓰기처럼 학교에 무언가를 바꾸는 일은 앱이 하지 않아요. 왼쪽 학교 화면에서 직접 해 주세요." };
+      case "command": {
+        const command = commandOf(route);
+        if (command) return { kind: "command", command };
+        return open() ? { kind: "opened", text: "왼쪽에 학교 화면을 열었어요" } : { kind: "error", text: "그 화면을 열지 못했어요" };
+      }
+      case "path":
+        return open() ? { kind: "opened", text: `${route.course ? `${route.course} ` : ""}학교 화면을 왼쪽에 열었어요` } : { kind: "error", text: "그 화면을 열지 못했어요" };
+      case "chat":
+        return { kind: "answer", text: await gateway.complete(CHAT_PROMPT, chatUserPrompt(text, chatContext()), 300) };
+    }
+  } catch (error) {
+    return { kind: "error", text: error instanceof Error ? error.message : "AI에 묻지 못했어요" };
+  }
+}
+
+function ffmpegPath(): string {
+  const exe = process.platform === "win32" ? "ffmpeg.exe" : "ffmpeg";
+  return app.isPackaged ? join(process.resourcesPath, "ffmpeg", exe) : join(app.getAppPath(), "node_modules", "ffmpeg-static", exe);
+}
+
+/** Dev runs may cap the audio (KUROWSER_STT_CLIP_SECONDS) so a real-account test spends only a clip's credits. */
+function clipSeconds(): number | undefined {
+  const n = Number(!app.isPackaged ? process.env.KUROWSER_STT_CLIP_SECONDS : "");
+  return n > 0 ? n : undefined;
+}
+
+async function sttPlan(id: string): Promise<SttPlan> {
+  const data = lms.mediaData(id);
+  if (!data) return { ok: false, text: "그 강의를 찾지 못했어요" };
+  try {
+    const media = await resolveMedia(schoolSession(), data);
+    if (media.captionUrls.length) return { ok: true, source: "captions", credits: 0, text: "공식 자막 사용(0크레딧)" };
+    if (!gateway.connected) return { ok: false, source: "stt", text: "고대 AI를 연결하면 자막을 만들 수 있어요" };
+    const seconds = Math.min(media.duration, clipSeconds() ?? Infinity);
+    const credits = estimateCredits(seconds, STT_SPEED);
+    const remaining = await gateway.credits();
+    const minutes = Math.max(1, Math.round(seconds / 60));
+    const enough = remaining !== null && remaining >= credits;
+    const text = `STT 사용: 이 강의 ${minutes}분 ≈ ${credits.toFixed(1)}크레딧, 남은 크레딧 ${remaining === null ? "확인 못 함" : Math.floor(remaining)}`;
+    return { ok: enough, source: "stt", minutes, credits, remaining, text: enough ? text : `${text}. 크레딧이 모자라서 시작하지 않아요` };
+  } catch (error) {
+    return { ok: false, text: error instanceof Error ? error.message : "강의 정보를 읽지 못했어요" };
+  }
+}
+
+/**
+ * Subtitles and a summary for one recorded lecture. Official captions come first (no credits); otherwise the main
+ * video's audio, sped up 1.5x, goes to the Gateway STT. Only the content description and the media file are read:
+ * no viewer, playback, progress or attendance request is made. Files land beside the course's materials.
+ */
+async function sttRun(id: string): Promise<void> {
+  const emit = (e: SttEvent): void => send("stt", e);
+  const plan = await sttPlan(id);
+  if (!plan.ok) return emit({ id, kind: "failed", text: plan.text });
+  const rec = lms.snapshot().recordings.find((r) => r.id === id)!;
+  const course = lms.snapshot().courses.find((c) => c.id === rec.courseId)?.name ?? "기타";
+  const folder = join(downloadDir(), courseFolder(course));
+  const base = join(folder, `${rec.week ?? ""}주차 ${rec.title}`.trim().replace(/[\\/:*?"<>|]/g, "_").slice(0, 80));
+  const work = mkdtempSync(join(app.getPath("temp"), "kurowser-stt-"));
+  try {
+    mkdirSync(folder, { recursive: true });
+    const media = await resolveMedia(schoolSession(), lms.mediaData(id)!);
+    let text: string;
+    if (plan.source === "captions") {
+      emit({ id, kind: "progress", text: "공식 자막을 받는 중이에요" });
+      const raw = await fetchCaption(media.captionUrls[0]!);
+      writeFileSync(`${base}_자막${/-->/.test(raw) && raw.includes("WEBVTT") ? ".vtt" : ".srt"}`, raw);
+      text = captionText(raw);
+    } else {
+      emit({ id, kind: "progress", text: "강의 음성을 뽑는 중이에요" });
+      const audio = join(work, "lecture.mp3");
+      await extractAudio(ffmpegPath(), media.mediaUrl, audio, { clipSeconds: clipSeconds(), speed: STT_SPEED, normalize: true });
+      emit({ id, kind: "progress", text: `받아쓰는 중이에요 (약 ${plan.credits?.toFixed(1)}크레딧)` });
+      const result = await gateway.transcribe(audio, STT_MODEL);
+      // Timestamps come back on the sped-up audio; scale them to the lecture's own clock.
+      const segments = result.segments.map((s) => ({ ...s, start_ms: Math.round(s.start_ms * STT_SPEED), end_ms: Math.round(s.end_ms * STT_SPEED) }));
+      writeFileSync(`${base}_자막.srt`, toSrt(segments));
+      writeFileSync(`${base}_자막.txt`, result.text);
+      text = result.text;
+    }
+    emit({ id, kind: "progress", text: "요약하는 중이에요" });
+    const summary = await gateway.complete(SUMMARY_LECTURE_PROMPT, text.slice(0, 60_000), 700);
+    writeFileSync(`${base}_요약.md`, summary);
+    emit({ id, kind: "done", text: plan.source === "captions" ? "공식 자막으로 요약했어요" : "자막과 요약을 만들었어요", summary, folder });
+  } catch (error) {
+    emit({ id, kind: "failed", text: error instanceof Error ? error.message : "자막을 만들지 못했어요" });
+  } finally {
+    rmSync(work, { recursive: true, force: true });
+  }
 }
 
 function registerIpc(): void {
+  handle("sttPlan", (id: unknown) => (typeof id === "string" ? sttPlan(id) : { ok: false, text: "" }));
+  handle("sttRun", (id: unknown) => {
+    if (typeof id === "string") void sttRun(id);
+  });
+  handle("openFolder", async (path: unknown) => {
+    if (typeof path === "string" && normalize(path).startsWith(downloadDir())) await shell.openPath(path);
+  });
+  handle("chat", (text: unknown): Promise<ChatReply> | ChatReply =>
+    typeof text === "string" && text.trim() ? chat(text.trim().slice(0, 300)) : { kind: "error", text: "" },
+  );
   handle("snapshot", (): Snapshot => lms.snapshot());
   handle("refresh", () => lms.refresh());
   handle("login", async () => {
-    const ok = await signIn(mainWindow ?? undefined);
-    if (ok) void lms.refresh();
+    const ok = await signIn(pane);
+    if (ok) {
+      void lms.refresh();
+      if (!gateway.connected) void connectAi();
+    }
     return { ok, text: ok ? "로그인했어요" : "로그인 창이 닫혔어요" };
   });
   handle("logout", async () => {
@@ -162,14 +333,11 @@ function registerIpc(): void {
     store.update((s) => (s.notifyDue = on === true));
     return settings();
   });
-  handle("connectAi", async () => {
-    try {
-      const text = await gateway.connect(mainWindow, (status) => send("aiStatus", status));
-      return { ok: true, text };
-    } catch (error) {
-      return { ok: false, text: error instanceof Error ? error.message : "연결하지 못했어요" };
-    }
-  });
+  handle("connectAi", () => connectAi());
+  handle("paneState", () => pane.state());
+  handle("paneBack", () => pane.back());
+  handle("paneClose", () => pane.close());
+  handle("paneWiden", () => pane.widen());
   handle("interpret", async (text: unknown): Promise<{ via: "ai"; command: ReadCommand } | null> => {
     if (typeof text !== "string" || !text.trim() || !gateway.connected) return null;
     const courses = lms.snapshot().courses.map((c) => c.name);
@@ -195,6 +363,7 @@ function createMainWindow(): BrowserWindow {
   win.webContents.on("will-navigate", (event, url) => {
     if (!url.startsWith(`${APP_ORIGIN}/`)) event.preventDefault();
   });
+  win.on("resize", () => pane.layout());
   win.on("focus", () => {
     const fetchedAt = lms.snapshot().fetchedAt;
     if (fetchedAt && Date.now() - Date.parse(fetchedAt) > STALE_MS) void lms.refresh();
@@ -219,8 +388,17 @@ app.whenReady().then(async () => {
     app.exit(0);
     return;
   }
+  if (process.env.KUROWSER_BENCH && !app.isPackaged) {
+    const { runBench } = await import("./bench.ts");
+    await runBench(gateway, join(app.getAppPath(), "tests", "bench", "sentences.json"), process.env.KUROWSER_BENCH_OUT ?? join(app.getPath("temp"), "kurowser-bench.json"));
+    app.exit(0);
+    return;
+  }
   registerIpc();
-  lms.subscribe((snapshot) => send("snapshot", snapshot));
+  lms.subscribe((snapshot) => {
+    send("snapshot", snapshot);
+    if (snapshot.phase === "ready" && !aiAttempted && !gateway.connected && gatewayRestored) void connectAi();
+  });
   reminders.start();
   // The window comes first. Reading the stored AI key or the cookie key can wait on a macOS keychain
   // prompt (an unsigned or re-signed build asks again), and that wait must not keep the app windowless.
@@ -238,7 +416,10 @@ async function startLoading(): Promise<void> {
   const hint = setTimeout(() => lms.waitingForKeychain(), KEYCHAIN_HINT_MS);
   await safeStorage.isAsyncEncryptionAvailable().catch(() => false);
   clearTimeout(hint);
-  void gateway.restore();
+  void gateway.restore().finally(() => {
+    gatewayRestored = true;
+    if (lms.snapshot().phase === "ready" && !aiAttempted && !gateway.connected) void connectAi();
+  });
   void lms.refresh();
 }
 
