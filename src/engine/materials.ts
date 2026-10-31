@@ -160,11 +160,14 @@ export interface SyncLayout {
   termFolders: boolean;
 }
 
+/** Paths picked by downloads still running, so overlapping syncs into one folder never share a file name. */
+const reserved = new Set<string>();
+
 export async function syncMaterials(session: MaterialSession, rows: Raw[], dest: string, layout: SyncLayout = { termFolders: true }): Promise<Raw> {
   mkdirSync(dest, { recursive: true });
   const statePath = join(dest, STATE_FILENAME);
   const state = readState(statePath);
-  const taken = new Set(Object.values(state).map((entry) => entry.path!));
+  const taken = new Set([...Object.values(state).map((entry) => entry.path!), ...[...reserved].filter((p) => p.startsWith(`${dest}\u0000`)).map((p) => p.slice(dest.length + 1))]);
   const downloaded: Raw[] = [];
   const unavailable: Raw[] = [];
   let unchanged = 0;
@@ -182,9 +185,17 @@ export async function syncMaterials(session: MaterialSession, rows: Raw[], dest:
     }
     const relative = known ? known.path! : uniquePath(relativePath(row, layout), taken);
     taken.add(relative);
-    const size = await session.downloadFile!(row.download_url, join(dest, relative));
+    const slot = `${dest}\u0000${relative}`;
+    reserved.add(slot);
+    let size: number;
+    try {
+      size = await session.downloadFile!(row.download_url, join(dest, relative));
+    } finally {
+      reserved.delete(slot);
+    }
     state[row.key] = { path: relative, updated_at: row.updated_at };
-    writeState(statePath, state);
+    // Other syncs may have written the state file meanwhile; merge into the latest copy (no await in between).
+    writeState(statePath, { ...readState(statePath), [row.key]: state[row.key]! });
     downloaded.push({ ...publicMaterial(row), size, path: relative, status: known ? "updated" : "new" });
   }
   return { dest, downloaded, unchanged, unavailable };
