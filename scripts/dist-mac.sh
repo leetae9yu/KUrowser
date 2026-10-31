@@ -24,7 +24,7 @@ fi
 bun run build
 # Pack first: electron-builder flips the fuses here and leaves an ad-hoc signature.
 electron-builder --mac dir
-codesign --force --deep --sign "$identity" "${keychain[@]}" "$app"
+codesign --force --deep --sign "$identity" ${keychain[@]+"${keychain[@]}"} "$app"
 codesign --verify --deep --strict "$app"
 codesign --display --requirements - "$app" 2>&1 | grep designated
 electron-builder --mac dmg --prepackaged "$app"
