@@ -1,4 +1,4 @@
-import { app, BrowserWindow, safeStorage, session, type Session } from "electron";
+import { app, BrowserWindow, safeStorage, screen, session, type Session } from "electron";
 
 import { CANVAS_ORIGIN, DEFAULT_ENTRY_URL } from "../engine/live.ts";
 import { engineRequestAllowed, isAiLoginUrl, isAllowedPage, isSchoolHost, isSchoolUrl } from "./hosts.ts";
@@ -14,6 +14,8 @@ export function schoolSession(): Session {
   const ses = session.fromPartition(PARTITION);
   if (!guarded) {
     guarded = true;
+    // Canvas flags the Electron user agent as an unsupported browser and shows a warning on every page.
+    ses.setUserAgent(ses.getUserAgent().replace(/ (KUrowser|Electron)\/\S+/g, ""));
     ses.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
     ses.webRequest.onBeforeRequest((details, callback) => {
       const top = details.resourceType === "mainFrame";
@@ -59,7 +61,15 @@ export function makeEngineWindow(): BrowserWindow {
 
 export function openSchoolWindow(url: string, parent?: BrowserWindow): BrowserWindow | null {
   if (!isSchoolUrl(url)) return null;
-  const win = new BrowserWindow({ width: 1180, height: 860, parent, title: "고려대학교", webPreferences: schoolPreferences() });
+  // The SSO page's notice popup is about 1400px wide; a narrower window hides its close button.
+  const area = screen.getPrimaryDisplay().workAreaSize;
+  const win = new BrowserWindow({
+    width: Math.min(1440, area.width),
+    height: Math.min(900, area.height),
+    parent,
+    title: "고려대학교",
+    webPreferences: schoolPreferences(),
+  });
   guardWindow(win);
   void win.loadURL(url).catch(() => undefined);
   return win;
@@ -81,15 +91,16 @@ export async function canvasReady(ses: Session = schoolSession()): Promise<boole
  * keychain (Linux basic_text, or an unpackaged dev run) the cookies stay session-only unless a dev
  * run opts in with KUROWSER_ALLOW_BASIC_TEXT=1.
  */
-function canPersistCookies(): boolean {
+async function canPersistCookies(): Promise<boolean> {
   const devOptIn = !app.isPackaged && process.env.KUROWSER_ALLOW_BASIC_TEXT === "1";
   if (!app.isPackaged) return devOptIn;
-  if (!safeStorage.isEncryptionAvailable()) return false;
+  // The async check waits for a keychain prompt without blocking the main process.
+  if (!(await safeStorage.isAsyncEncryptionAvailable())) return false;
   return process.platform !== "linux" || safeStorage.getSelectedStorageBackend() !== "basic_text";
 }
 
 export async function keepLogin(ses: Session = schoolSession()): Promise<void> {
-  if (!canPersistCookies()) return;
+  if (!(await canPersistCookies())) return;
   const expirationDate = Date.now() / 1000 + KEEP_LOGIN_DAYS * 86_400;
   for (const cookie of await ses.cookies.get({})) {
     const domain = (cookie.domain ?? "").replace(/^\./, "");

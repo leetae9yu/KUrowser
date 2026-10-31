@@ -55,8 +55,8 @@ export interface FileItem {
 export type LoadPart = "courses" | "lectures" | "files";
 
 export interface Snapshot {
-  /** login: the student has to sign in once; loading: first fetch running; ready: data shown. */
-  phase: "login" | "loading" | "ready" | "error";
+  /** login: the student has to sign in once; keychain: the OS asks whether the app may read its stored key; loading: first fetch running; ready: data shown. */
+  phase: "login" | "keychain" | "loading" | "ready" | "error";
   error: string | null;
   courses: Course[];
   assignments: Assignment[];
@@ -74,6 +74,7 @@ export interface Settings {
   downloadDir: string;
   aiConnected: boolean;
   aiLabel: string;
+  signedInBefore: boolean;
 }
 
 export type DownloadEvent =

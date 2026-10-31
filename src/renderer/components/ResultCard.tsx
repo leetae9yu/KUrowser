@@ -3,7 +3,7 @@ import type { Outcome } from "../commands";
 import { courseOf, type Notice } from "../data";
 import { jobFor, useStore } from "../store";
 import { CourseList, CourseView } from "./CourseView";
-import { FileRow, LectureRow } from "./Rows";
+import { FileRow, LectureRow, NoticeRow } from "./Rows";
 import { Timeline } from "./Timeline";
 
 export function Summary({ items }: { items: Notice[] }) {
@@ -100,7 +100,13 @@ export function ResultCard({ outcome, onRun, onBack }: { outcome: Outcome; onRun
             ))}
           </ul>
         )}
-        {outcome.kind === "notices" && <Summary items={outcome.items} />}
+        {outcome.kind === "notices" && (
+          <ul className="list">
+            {outcome.items.map((n) => (
+              <NoticeRow key={n.id} n={n} />
+            ))}
+          </ul>
+        )}
         {outcome.kind === "course" && <CourseView course={outcome.course} />}
         {outcome.kind === "courses" && <CourseList onOpen={onRun} />}
       </div>

@@ -17,6 +17,22 @@ const NOTICE_NEW_DAYS = 7;
 const NOTICE_KEEP_DAYS = 30;
 const FILE_NEW_DAYS = 14;
 const NOTICE_BODY_CHARS = 600;
+/** Courses read at once. Every read is a fetch inside the one hidden window, so they can overlap. */
+const COURSE_CONCURRENCY = 4;
+
+/** Map with at most `limit` calls in flight, keeping input order. */
+async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out = new Array<R>(items.length);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < items.length) {
+      const i = next++;
+      out[i] = await fn(items[i]!);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return out;
+}
 
 const hash = (...parts: unknown[]): string => createHash("sha256").update(parts.map(String).join("\u0000")).digest("hex").slice(0, 16);
 const isRecord = (value: unknown): value is Raw => !!value && typeof value === "object" && !Array.isArray(value);
@@ -66,6 +82,8 @@ export class LmsService {
   private chain: Promise<unknown> = Promise.resolve();
   private snap: Snapshot = emptySnapshot("loading");
   private raws = new Map<string, Raw>();
+  /** Attendance read while getting the LearningX token, reused by the lecture pass of the same load. */
+  private warmAttendance = new Map<string, Raw>();
   private links: Links = { assignments: new Map(), lectures: new Map(), notices: new Map(), files: new Map() };
   private listeners = new Set<(s: Snapshot) => void>();
   private refreshing: Promise<void> | null = null;
@@ -113,6 +131,11 @@ export class LmsService {
     return next;
   }
 
+  /** The first load waits on an OS keychain prompt; the window says so instead of a bare spinner. */
+  waitingForKeychain(): void {
+    if (this.snap.phase === "loading" && !this.snap.courses.length) this.set({ phase: "keychain" });
+  }
+
   refresh(): Promise<void> {
     this.refreshing ??= this.load().finally(() => {
       this.refreshing = null;
@@ -124,12 +147,16 @@ export class LmsService {
     if (this.snap.phase !== "ready") this.set({ phase: "loading", error: null });
     else this.set({ pending: ["lectures", "files"] });
     try {
-      await this.withSession((session) => this.loadCourses(session));
-      this.set({ phase: "ready", pending: ["lectures", "files"], fetchedAt: new Date().toISOString() });
-      await this.withSession((session) => this.loadLectures(session)).catch((error) => this.partFailed("lectures", error));
-      this.set({ pending: ["files"] });
-      await this.withSession((session) => this.loadFiles(session)).catch((error) => this.partFailed("files", error));
-      this.set({ pending: [] });
+      // One hidden window for the whole load. Files come before lectures: new files feed
+      // [한 번에 끝내기], and lectures need one attendance page per course, which is the slow part.
+      await this.withSession(async (session) => {
+        await this.loadCourses(session);
+        this.set({ phase: "ready", pending: ["files", "lectures"], fetchedAt: new Date().toISOString() });
+        await this.loadFiles(session).catch((error) => this.partFailed("files", error));
+        this.set({ pending: this.snap.pending.filter((p) => p !== "files") });
+        await this.loadLectures(session).catch((error) => this.partFailed("lectures", error));
+        this.set({ pending: [] });
+      });
     } catch (error) {
       if (error instanceof LoginRequired) this.set({ ...emptySnapshot("login") });
       else this.set({ phase: this.snap.courses.length ? "ready" : "error", pending: [], error: friendly(error) });
@@ -144,6 +171,7 @@ export class LmsService {
   private async loadCourses(session: ElectronBrowserSession): Promise<void> {
     const raw = await fetchCourses(session);
     this.raws = new Map(raw.map((c) => [String(c.id), c]));
+    await this.warmLearningx(session, raw);
     const courses: Course[] = raw.map((c, index) => ({
       id: String(c.id),
       name: displayName(String(c.name ?? "")),
@@ -154,9 +182,14 @@ export class LmsService {
     const assignments: Assignment[] = [];
     const notices: Notice[] = [];
     const links: Links = { ...this.links, assignments: new Map(), notices: new Map() };
-    for (const course of raw) {
+    const perCourse = await mapLimit(raw, COURSE_CONCURRENCY, async (course) => ({
+      course,
+      items: await this.courseAssignments(session, course),
+      notices: await this.courseNotices(session, course, links),
+    }));
+    for (const { course, items, notices: courseNotices } of perCourse) {
       const courseId = String(course.id);
-      for (const item of await this.courseAssignments(session, course)) {
+      for (const item of items) {
         const due = iso(item.due_at);
         if (!due) continue;
         const id = item.id ? String(item.id) : hash(courseId, item.name, due);
@@ -165,7 +198,7 @@ export class LmsService {
         assignments.push({ id, courseId, title: String(item.name ?? item.title ?? "").trim(), due, submitted });
         links.assignments.set(id, String(item.html_url || `${CANVAS_ORIGIN}/courses/${courseId}/assignments`));
       }
-      notices.push(...(await this.courseNotices(session, course, links)));
+      notices.push(...courseNotices);
     }
     this.links = links;
     this.set({ courses, assignments, notices: notices.sort((a, b) => b.postedAt.localeCompare(a.postedAt)) });
@@ -219,11 +252,13 @@ export class LmsService {
   private async loadLectures(session: ElectronBrowserSession): Promise<void> {
     const lectures: Lecture[] = [];
     const urls = new Map<string, string>();
-    for (const course of this.raws.values()) {
-      if (course.workflow_state === "unpublished") continue;
+    const courses = [...this.raws.values()].filter((course) => course.workflow_state !== "unpublished");
+    // Module links are plain fetches and can overlap; attendance navigates the window, so it goes one course at a time after them.
+    const links = await mapLimit(courses, COURSE_CONCURRENCY, (course) => this.moduleLinks(session, String(course.id)));
+    for (const [i, course] of courses.entries()) {
       const courseId = String(course.id);
-      const attendance = await session.fetchAttendance(course.id);
-      const pages = await this.moduleLinks(session, courseId);
+      const attendance = this.warmAttendance.get(courseId) ?? (await session.fetchAttendance(course.id));
+      const pages = links[i]!;
       for (const row of unwatchedRows(course, attendance)) {
         if (!row.available) continue;
         const until = iso(row.due_at) || null;
@@ -235,6 +270,22 @@ export class LmsService {
     }
     this.links = { ...this.links, lectures: urls };
     this.set({ lectures });
+  }
+
+  /**
+   * LearningX board reads need the xn_api_token cookie, which only a LearningX tool launch sets. Without it
+   * the board posts (notices and files) silently come back empty, so open one course's attendance tab first.
+   */
+  private async warmLearningx(session: ElectronBrowserSession, raw: Raw[]): Promise<void> {
+    this.warmAttendance = new Map();
+    if (await session.evaluate("document.cookie.includes('xn_api_token=')").catch(() => false)) return;
+    const first = raw.find((course) => course.workflow_state !== "unpublished");
+    if (!first) return;
+    try {
+      this.warmAttendance.set(String(first.id), await session.fetchAttendance(first.id));
+    } catch (error) {
+      if (!(error instanceof LiveCommandError)) throw error;
+    }
   }
 
   private async moduleLinks(session: ElectronBrowserSession, courseId: string): Promise<Map<string, string>> {
@@ -257,8 +308,10 @@ export class LmsService {
     const files: FileItem[] = [];
     const rows = new Map<string, Raw>();
     const newSince = Date.now() - FILE_NEW_DAYS * DAY;
-    for (const course of this.raws.values()) {
-      for (const row of await materialCandidates(session, course, fetchRecordingPages, recordingAccessible)) {
+    const courses = [...this.raws.values()];
+    const perCourse = await mapLimit(courses, COURSE_CONCURRENCY, (course) => materialCandidates(session, course, fetchRecordingPages, recordingAccessible));
+    for (const [i, course] of courses.entries()) {
+      for (const row of perCourse[i]!) {
         const known = state[row.key];
         const downloaded = !!known?.path && existsSync(join(dest, known.path)) && statSync(join(dest, known.path)).isFile() && known.updated_at === row.updated_at;
         const updated = Date.parse(row.updated_at);
