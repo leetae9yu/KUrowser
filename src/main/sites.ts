@@ -1,5 +1,8 @@
-import type { PortalNotice, SitesSnapshot } from "../shared/types.ts";
+import type { WebContents } from "electron";
+
+import type { PortalNotice, SeatRoom, SitesSnapshot } from "../shared/types.ts";
 import type { DiskCache } from "./cache.ts";
+import { libraryLoans, librarySeats, librarySignIn } from "./library.ts";
 import { academicSchedule, portalBody, portalNotices, SCHOOL_MENUS } from "./portal.ts";
 import { SiteError, type SiteGet } from "./site-text.ts";
 
@@ -8,15 +11,24 @@ const NOTICE_NEW_DAYS = 3;
 /** Bodies are read for the newest posts only, a few at a time. */
 const BODY_POSTS = 8;
 const BODY_LANES = 3;
+/** Seat counts change by the minute; a request within a minute reuses the last read. */
+const SEATS_FRESH_MS = 60_000;
 
 export type SitesCache = Omit<SitesSnapshot, "menus">;
 
-const empty = (): SitesCache => ({ portal: { data: { notices: [], schedule: [] }, fetchedAt: null, error: null } });
+const empty = (): SitesCache => ({
+  portal: { data: { notices: [], schedule: [] }, fetchedAt: null, error: null },
+  library: { data: { loans: [], signedIn: true }, fetchedAt: null, error: null },
+});
 
 const friendly = (error: unknown): string => (error instanceof SiteError ? error.message : "학교 사이트를 읽지 못했어요");
 
 export interface SitesDeps {
   get: SiteGet;
+  /** Lends the shared hidden school window for a site sign-in. */
+  hidden: <T>(job: (wc: WebContents) => Promise<T>) => Promise<T>;
+  /** Re-saves the school's session cookies so a site sign-in survives a restart. */
+  keepLogin: () => Promise<void>;
   cache: DiskCache<SitesCache>;
   readNotices: () => ReadonlySet<string>;
 }
@@ -31,6 +43,8 @@ export class SitesService {
   private refreshing: Promise<void> | null = null;
   /** Bumped at logout so a read that was running then cannot write its result back. */
   private generation = 0;
+  private seatRead: { rooms: SeatRoom[]; at: number; error: string | null } | null = null;
+  private seatLoad: Promise<void> | null = null;
 
   constructor(private readonly deps: SitesDeps) {
     this.state = { ...empty(), ...deps.cache.read() };
@@ -63,10 +77,48 @@ export class SitesService {
   }
 
   refresh(): Promise<void> {
-    this.refreshing ??= this.loadPortal().finally(() => {
+    this.refreshing ??= Promise.all([this.loadPortal(), this.loadLibrary()]).then(() => undefined).finally(() => {
       this.refreshing = null;
     });
     return this.refreshing;
+  }
+
+  async seats(): Promise<{ rooms: SeatRoom[]; at: string | null; error: string | null }> {
+    if (!this.seatRead || Date.now() - this.seatRead.at > SEATS_FRESH_MS) {
+      this.seatLoad ??= librarySeats(this.deps.get)
+        .then((rooms) => {
+          this.seatRead = { rooms, at: Date.now(), error: null };
+        })
+        .catch((error) => {
+          this.seatRead = { rooms: this.seatRead?.rooms ?? [], at: Date.now(), error: friendly(error) };
+        })
+        .finally(() => {
+          this.seatLoad = null;
+        });
+      await this.seatLoad;
+    }
+    const read = this.seatRead!;
+    return { rooms: read.rooms, at: new Date(read.at).toISOString(), error: read.error };
+  }
+
+  /** Loans: a lapsed library session is signed in again once with the portal login, in the shared window. */
+  private async loadLibrary(): Promise<void> {
+    const generation = this.generation;
+    const old = this.state.library;
+    try {
+      let loans = await libraryLoans(this.deps.get);
+      if (loans === null && (await this.deps.hidden((wc) => librarySignIn(wc)))) {
+        await this.deps.keepLogin();
+        loans = await libraryLoans(this.deps.get);
+      }
+      this.set({
+        library: loans === null
+          ? { data: { loans: old.data.loans, signedIn: false }, fetchedAt: old.fetchedAt, error: "도서관 로그인을 하지 못했어요" }
+          : { data: { loans, signedIn: true }, fetchedAt: new Date().toISOString(), error: null },
+      }, generation);
+    } catch (error) {
+      this.set({ library: { ...old, error: friendly(error) } }, generation);
+    }
   }
 
   noticeUrl(id: string): string | null {

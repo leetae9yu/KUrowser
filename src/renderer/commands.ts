@@ -1,4 +1,4 @@
-import type { PortalNotice, ReadCommand, ScheduleEntry, SchoolMenu, SitesSnapshot } from "../shared/types";
+import type { Loan, PortalNotice, ReadCommand, ScheduleEntry, SchoolMenu, SeatRoom, SitesSnapshot } from "../shared/types";
 import { shortCourseName, type Theme, type Assignment, type Course, type Data, type FileItem, type Lecture, type Notice, type Recording } from "./data";
 import { addDays, today0, weekStart } from "./format";
 import type { Route } from "./router";
@@ -16,6 +16,8 @@ export type Outcome =
   | { kind: "portal"; title: string; items: PortalNotice[] }
   | { kind: "schedule"; title: string; items: ScheduleEntry[] }
   | { kind: "menus"; title: string; items: SchoolMenu[] }
+  | { kind: "loans"; title: string; items: Loan[] }
+  | { kind: "seats"; title: string; items: SeatRoom[] }
   | { kind: "unknown"; title: string };
 
 export interface Snapshot {
@@ -32,7 +34,19 @@ export type Parsed =
   | { kind: "portal" }
   | { kind: "schedule"; word?: string }
   | { kind: "menu"; menu: SchoolMenu }
-  | { kind: "menus" };
+  | { kind: "menus" }
+  | { kind: "loans" }
+  | { kind: "seats"; library?: string };
+
+/** Words for each library in the seat service, matched without spaces. */
+const LIBRARY_WORDS: readonly (readonly [string, string[]])[] = [
+  ["중앙도서관", ["중앙도서관", "중도"]],
+  ["중앙광장", ["중앙광장", "중광"]],
+  ["백주년기념 학술정보관", ["백주년", "학술정보관", "백기"]],
+  ["과학도서관", ["과학도서관", "과도"]],
+  ["하나스퀘어", ["하나스퀘어", "하스"]],
+  ["법학도서관", ["법학도서관", "법도"]],
+];
 
 const OPEN_WORDS = ["열어", "열기", "화면", "들어가", "바로가기", "가줘", "켜줘", "페이지"];
 /** Calendar words a student asks the registrar's calendar about; the first match also filters the answer. */
@@ -61,6 +75,9 @@ function parseSites(s: string, sites: SitesSnapshot | undefined, course: string 
   const menu = sites?.menus.find((m) => m.words.some((w) => s.includes(w)));
   if (menu && has(s, ...OPEN_WORDS)) return { kind: "menu", menu };
   if (has(s, "학교메뉴", "학교바로가기", "학교사이트")) return { kind: "menus" };
+  const library = LIBRARY_WORDS.find(([, words]) => has(s, ...words))?.[0];
+  if (has(s, "열람실", "좌석") || (has(s, "자리", "빈자리") && (library || has(s, "도서관")))) return { kind: "seats", library };
+  if (has(s, "빌린책", "대출", "반납", "연체", "도서관책", "빌려온") && (!has(s, ...LMS_WORDS) || has(s, "도서관", "책"))) return { kind: "loans" };
   if (has(s, "학교공지", "포털", "학사공지", "전체공지", "학교소식", "kupid")) return { kind: "portal" };
   if (has(s, "학사일정", "학사력", "학사달력")) return { kind: "schedule", word: SCHEDULE_WORDS.find((w) => s.includes(w)) };
   const word = SCHEDULE_WORDS.find((w) => s.includes(w));
@@ -140,6 +157,25 @@ export function scheduleOutcome(sites: SitesSnapshot, word?: string, today = new
   }
   if (!sites.portal.data.schedule.length) return { kind: "schedule", title: sites.portal.error ?? "학사 일정을 아직 못 가져왔어요", items: [] };
   return { kind: "schedule", title: upcoming.length ? "다가오는 학사 일정이에요" : "이번 학기 학사 일정이 끝났어요", items: upcoming.slice(0, 6) };
+}
+
+const monthDay = (iso: string): string => `${Number(iso.slice(5, 7))}월 ${Number(iso.slice(8, 10))}일`;
+
+/** Books out, soonest due first. */
+export function loansOutcome(sites: SitesSnapshot): Outcome {
+  const { loans, signedIn } = sites.library.data;
+  if (!signedIn) return { kind: "loans", title: "도서관 로그인을 하지 못했어요. 도서관 대출 화면에서 확인해 주세요", items: [] };
+  if (!sites.library.fetchedAt) return { kind: "loans", title: sites.library.error ?? "대출 목록을 아직 못 가져왔어요", items: [] };
+  if (!loans.length) return { kind: "loans", title: "빌린 책이 없어요", items: [] };
+  return { kind: "loans", title: `빌린 책 ${loans.length}권, 가장 가까운 반납일은 ${monthDay(loans[0]!.due)}이에요`, items: loans };
+}
+
+/** Reading rooms with the most free seats first, all libraries or one. */
+export function seatsOutcome(rooms: SeatRoom[], library?: string, error?: string | null): Outcome {
+  const items = rooms.filter((r) => !library || r.library === library).sort((a, b) => b.available - a.available);
+  if (!items.length) return { kind: "seats", title: error ?? "열람실 좌석을 가져오지 못했어요", items };
+  const free = items.reduce((sum, r) => sum + r.available, 0);
+  return { kind: "seats", title: `${library ? `${library} ` : ""}열람실 빈자리 ${free}석이에요`, items };
 }
 
 /** Recorded lectures, newest week first, for the subtitles+summary card. */

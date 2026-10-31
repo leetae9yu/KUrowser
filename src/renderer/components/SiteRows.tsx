@@ -1,6 +1,6 @@
 import { ChevronDown, ChevronUp, ExternalLink } from "lucide-react";
 import { useState } from "react";
-import type { PortalNotice, ScheduleEntry, SchoolMenu } from "../../shared/types";
+import type { Loan, PortalNotice, ScheduleEntry, SchoolMenu, SeatRoom } from "../../shared/types";
 import { ago } from "../format";
 import { api, useStore } from "../store";
 
@@ -52,6 +52,47 @@ export function ScheduleRow({ e }: { e: ScheduleEntry }) {
         <span className="row-title">{e.event}</span>
         <span className="row-meta">
           <span>{e.start === e.end ? monthDay(e.start) : `${monthDay(e.start)} ~ ${monthDay(e.end)}`}</span>
+        </span>
+      </div>
+    </li>
+  );
+}
+
+/** Whole days from today to a `YYYY-MM-DD` date; negative once it has passed. */
+export function daysUntil(iso: string, today = new Date()): number {
+  const start = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
+  return Math.round((new Date(`${iso}T00:00:00`).getTime() - start) / 86_400_000);
+}
+
+export function LoanRow({ l }: { l: Loan }) {
+  const left = daysUntil(l.due);
+  const level = left < 0 ? "urgent" : left <= 2 ? "soon" : "later";
+  return (
+    <li className="row">
+      <div className="row-main">
+        <span className="row-title">{l.title}</span>
+        <span className="row-meta">
+          {l.place && <span>{l.place}</span>}
+          <span className={`due due-${level}`}>{left < 0 ? `반납일 ${-left}일 지남` : left === 0 ? "오늘 반납" : `${monthDay(l.due)} 반납(D-${left})`}</span>
+          {l.renewals > 0 && <span>연장 {l.renewals}번</span>}
+        </span>
+      </div>
+    </li>
+  );
+}
+
+export function SeatRow({ r }: { r: SeatRoom }) {
+  return (
+    <li className="row">
+      <div className="row-main">
+        <span className="row-title">
+          {r.library} {r.name}
+        </span>
+        <span className="row-meta">
+          <span className={`due due-${r.available ? "later" : "urgent"}`}>
+            빈자리 {r.available} / {r.total}
+          </span>
+          <span>{r.hours}</span>
         </span>
       </div>
     </li>

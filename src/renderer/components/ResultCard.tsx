@@ -5,7 +5,7 @@ import { api, jobFor, useStore } from "../store";
 import { CourseList, CourseView } from "./CourseView";
 import { RecordingRow } from "./RecordingRow";
 import { FileRow, LectureRow, NoticeRow } from "./Rows";
-import { MenuButtons, PortalRow, ScheduleRow } from "./SiteRows";
+import { LoanRow, MenuButtons, PortalRow, ScheduleRow, SeatRow } from "./SiteRows";
 import { Timeline } from "./Timeline";
 
 export function Summary({ items }: { items: Notice[] }) {
@@ -69,6 +69,13 @@ function useNextActions(outcome: Outcome): Action[] {
       done: unread.length === 0,
       run: () => markRead(unread.map((n) => n.id)),
     });
+  }
+  if (outcome.kind === "loans") {
+    // Renewing is a school write; the app only opens the library page where the student does it.
+    out.push({ label: "도서관 대출 화면 열기", icon: ExternalLink, run: () => void api().openMenu("loans") });
+  }
+  if (outcome.kind === "seats") {
+    out.push({ label: "열람실 좌석 화면 열기", icon: ExternalLink, run: () => void api().openMenu("seats") });
   }
   if (outcome.kind === "schedule") {
     out.push({ label: "학사 일정 화면 열기", icon: ExternalLink, run: () => void api().openMenu("calendar") });
@@ -138,6 +145,20 @@ export function ResultCard({ outcome, onRun, onBack }: { outcome: Outcome; onRun
           </ul>
         )}
         {outcome.kind === "menus" && <MenuButtons items={outcome.items} />}
+        {outcome.kind === "loans" && (
+          <ul className="list">
+            {outcome.items.map((l) => (
+              <LoanRow key={l.id} l={l} />
+            ))}
+          </ul>
+        )}
+        {outcome.kind === "seats" && (
+          <ul className="list">
+            {outcome.items.map((r) => (
+              <SeatRow key={`${r.library}-${r.name}`} r={r} />
+            ))}
+          </ul>
+        )}
         {outcome.kind === "recordings" && (
           <ul className="list">
             {outcome.items.map((r) => (

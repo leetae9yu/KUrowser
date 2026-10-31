@@ -1,10 +1,11 @@
-import { Bell, CalendarDays, Download, ExternalLink, Megaphone, Play, School } from "lucide-react";
+import { Bell, BookOpen, CalendarDays, Download, ExternalLink, Megaphone, Play, School } from "lucide-react";
+import { daysUntil } from "./components/SiteRows";
 import { useMemo } from "react";
 import { courseOf, type CourseId, type FileItem, type Notice } from "./data";
 import { humanTime } from "./format";
 import { jobFor, useStore } from "./store";
 
-export type TaskKind = "assignment" | "lecture" | "files" | "notices" | "remind" | "portal" | "schedule";
+export type TaskKind = "assignment" | "lecture" | "files" | "notices" | "remind" | "portal" | "schedule" | "loans";
 
 export interface Task {
   id: string;
@@ -160,6 +161,28 @@ export function useTasks(): Task[] {
         run: () => openSchoolPage("calendar", `s-${soon.start}-${soon.event}`),
         rank: 2,
         at: new Date(`${soon.start}T00:00:00`).getTime(),
+      });
+    }
+
+    // Books due within three days or overdue; renewing happens on the library page, so the card only opens it.
+    const dueBooks = sites.library.data.loans.filter((l) => daysUntil(l.due) <= 3);
+    const loanId = `loans-${dueBooks.map((l) => l.id + l.due).join(",")}`;
+    if (dueBooks.length && !opened.has(loanId)) {
+      const first = dueBooks[0]!;
+      const left = daysUntil(first.due);
+      list.push({
+        id: loanId,
+        kind: "loans",
+        headline: left < 0 ? `도서관 책 ${dueBooks.length}권, 반납일이 지났어요` : `도서관 책 ${dueBooks.length}권, ${left === 0 ? "오늘" : `${left}일 안에`} 반납해야 해요`,
+        detail: `${dueBooks.map((l) => l.title).slice(0, 3).join("\n")}\n연장은 도서관 화면에서 해요`,
+        action: "도서관 대출 화면 열기",
+        icon: BookOpen,
+        doneLine: "도서관 대출 화면을 열었어요",
+        doing: "도서관 대출 화면 여는 중",
+        auto: false,
+        run: () => openSchoolPage("loans", loanId),
+        rank: left <= 1 ? 0 : 2,
+        at: new Date(`${first.due}T00:00:00`).getTime(),
       });
     }
 

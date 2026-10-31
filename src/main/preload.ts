@@ -48,6 +48,7 @@ const api: KurowserApi = {
   refreshSites: () => ipcRenderer.invoke("refreshSites"),
   openMenu: (id) => ipcRenderer.invoke("openMenu", id),
   openPortalNotice: (id) => ipcRenderer.invoke("openPortalNotice", id),
+  seats: () => ipcRenderer.invoke("seats"),
 };
 
 contextBridge.exposeInMainWorld("kurowser", api);
