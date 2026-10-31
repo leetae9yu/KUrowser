@@ -50,7 +50,7 @@ interface Store {
 
 const StoreContext = createContext<Store | null>(null);
 
-const EMPTY: Snapshot = { phase: "loading", error: null, courses: [], assignments: [], lectures: [], recordings: [], notices: [], files: [], pending: [], reminders: [], fetchedAt: null };
+const EMPTY: Snapshot = { phase: "loading", error: null, courses: [], assignments: [], lectures: [], recordings: [], notices: [], files: [], pending: [], loaded: [], reminders: [], fetchedAt: null };
 const PANE_CLOSED: PaneState = { open: false, wide: false, title: "", canGoBack: false };
 
 function readTheme(): Theme {
@@ -70,6 +70,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [theme, setThemeState] = useState<Theme>(readTheme);
   const [toast, setToast] = useState<Store["toast"]>(null);
   const toastSeq = useRef(0);
+  const firstScreen = useRef(false);
 
   useEffect(() => {
     void api().snapshot().then(setSnapshot);
@@ -96,6 +97,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       offDownload();
     };
   }, []);
+
+  // The first screen that is not a spinner: school data (from the last run or this one), the sign-in or an error.
+  useEffect(() => {
+    if (firstScreen.current || snapshot.phase === "loading" || snapshot.phase === "keychain") return;
+    firstScreen.current = true;
+    requestAnimationFrame(() => void api().firstScreen());
+  }, [snapshot.phase]);
 
   useEffect(() => {
     const root = document.documentElement;

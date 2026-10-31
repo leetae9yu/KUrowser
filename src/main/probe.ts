@@ -59,7 +59,7 @@ async function silenceProbe(session: ElectronBrowserSession): Promise<void> {
     out("scan", { n, lectureSeconds: Number(a.data.duration), silence: Math.round(silence * 10) / 10 });
     if (!pausy || silence > pausy.silence) pausy = { a, silence, wav };
   }
-  const gateway = new GatewayClient();
+  const gateway = new GatewayClient((job) => job(session.webContents!));
   await gateway.restore();
   const runs: Array<{ label: string; wav: string; speed: number; cut: boolean; norm: boolean; ref: string }> = [
     { label: "A silence+1.5x", wav: join(dir, "clip-source.wav"), speed: 1.5, cut: true, norm: false, ref: "clip-1x.txt" },
@@ -174,7 +174,7 @@ async function sttProbe(session: ElectronBrowserSession, data: Raw): Promise<voi
     const seconds = await transcode(ffmpeg, base, file, { speed: v.speed, cutSilence: v.cutSilence });
     clips.push({ ...v, file, seconds, estimate: estimateCredits(seconds) });
   }
-  const gateway = new GatewayClient();
+  const gateway = new GatewayClient((job) => job(session.webContents!));
   await gateway.restore();
   const remaining = await gateway.credits();
   const total = clips.reduce((s, c) => s + c.estimate, 0);

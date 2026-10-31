@@ -1,5 +1,6 @@
 export const SCHOOL_DOMAIN = "korea.ac.kr";
 export const AI_HOSTS: ReadonlySet<string> = new Set(["llm.korea.ac.kr", "llmsso.korea.ac.kr", "sso.korea.ac.kr", "api.baze.co"]);
+const AI_SITE_HOSTS: ReadonlySet<string> = new Set(["llm.korea.ac.kr", "llmsso.korea.ac.kr"]);
 
 function parse(url: string): URL | null {
   try {
@@ -52,8 +53,10 @@ const CANVAS_LOGIN = /^\/login(\/|$)/;
  */
 export function engineRequestAllowed(method: string, url: string, resourceType: string): boolean {
   if (!MUTATING.has(method.toUpperCase())) return true;
-  if (!DOCUMENT_TYPES.has(resourceType)) return false;
   const u = parse(url);
+  // The AI site signs in inside the same hidden window; its own login hand-off posts are not school writes.
+  if (u && AI_SITE_HOSTS.has(u.hostname) && isAiLoginUrl(url)) return true;
+  if (!DOCUMENT_TYPES.has(resourceType)) return false;
   if (!u || u.protocol !== "https:" || !isSchoolHost(u.hostname)) return false;
   if (u.hostname === "sso.korea.ac.kr") return true;
   if (u.hostname !== "mylms.korea.ac.kr" && u.hostname !== "canvas.korea.ac.kr") return false;

@@ -110,10 +110,12 @@ export function Chat({ active }: { active: boolean }) {
     if (rules.kind === "theme" || rules.kind === "navigate") return false;
     if (snap.phase === "error") return false;
     if (snap.phase !== "ready") return true;
-    if (rules.kind === "recordings") return snap.pending.includes("lectures");
+    // A part shown from the last run answers at once; only a part that never loaded makes the request wait.
+    const missing = (part: "lectures" | "files") => snap.pending.includes(part) && !snap.loaded.includes(part);
+    if (rules.kind === "recordings") return missing("lectures");
     const c = rules.command.command;
-    if (c === "lectures" || c === "deadlines") return snap.pending.includes("lectures");
-    if (c === "files") return snap.pending.includes("files");
+    if (c === "lectures" || c === "deadlines") return missing("lectures");
+    if (c === "files") return missing("files");
     return false;
   };
 

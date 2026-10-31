@@ -40,6 +40,7 @@ const api: KurowserApi = {
   sttRun: (id) => ipcRenderer.invoke("sttRun", id),
   onStt: (fn) => listen("stt", fn),
   openFolder: (path) => ipcRenderer.invoke("openFolder", path),
+  firstScreen: () => ipcRenderer.invoke("firstScreen"),
 };
 
 contextBridge.exposeInMainWorld("kurowser", api);

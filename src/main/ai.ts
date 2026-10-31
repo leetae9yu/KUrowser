@@ -1,9 +1,8 @@
-import { app, BrowserWindow, net, safeStorage, type Session, type WebContents } from "electron";
+import { app, net, safeStorage, type Session, type WebContents } from "electron";
 import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
 
-import { isAiLoginUrl } from "./hosts.ts";
 import { schoolSession } from "./school.ts";
 
 export const SITE = "https://llm.korea.ac.kr";
@@ -17,6 +16,8 @@ const PREFERRED_MODELS = [/^gpt-5\.6-luna$/, /flash-lite/i, /haiku/i, /mini/i, /
 
 type Status = (text: string) => void;
 export type Opener = { open(url: string): WebContents | null; close(): void };
+/** Lends the app's shared hidden school window for one job. */
+export type Hidden = <T>(job: (wc: WebContents) => Promise<T>) => Promise<T>;
 type Verify = { ok: true; models: string[] } | { ok: false; rejected: boolean; status: number };
 
 class IssueUncertainError extends Error {}
@@ -91,21 +92,6 @@ function issuedKey(body: unknown): string | null {
   return data.key;
 }
 
-function hiddenAiLogin(ses: Session): BrowserWindow {
-  const win = new BrowserWindow({
-    show: false,
-    webPreferences: { session: ses, contextIsolation: true, nodeIntegration: false, sandbox: true },
-  });
-  win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
-  win.webContents.setAudioMuted(true);
-  const guard = (event: Electron.Event, url: string): void => {
-    if (!isAiLoginUrl(url)) event.preventDefault();
-  };
-  win.webContents.on("will-navigate", guard);
-  win.webContents.on("will-redirect", guard);
-  return win;
-}
-
 function waitForAiLogin(wc: WebContents, ses: Session, timeoutMs: number): Promise<void> {
   return new Promise((resolve, reject) => {
     let done = false;
@@ -113,8 +99,15 @@ function waitForAiLogin(wc: WebContents, ses: Session, timeoutMs: number): Promi
       if (done) return;
       done = true;
       clearTimeout(timer);
+      // The shared hidden window lives on; leave no listener behind on it.
+      if (!wc.isDestroyed()) {
+        wc.off("did-navigate", check);
+        wc.off("did-navigate-in-page", check);
+        wc.off("destroyed", closed);
+      }
       error ? reject(error) : resolve();
     };
+    const closed = (): void => finish(new Error("로그인 화면이 닫혔어요"));
     const timer = setTimeout(() => finish(new Error("로그인 대기 시간이 지났어요")), timeoutMs);
     const check = (_event: unknown, url: string): void => {
       if (!url.startsWith(`${SITE}/dashboard`)) return;
@@ -122,22 +115,19 @@ function waitForAiLogin(wc: WebContents, ses: Session, timeoutMs: number): Promi
     };
     wc.on("did-navigate", check);
     wc.on("did-navigate-in-page", check);
-    wc.on("destroyed", () => finish(new Error("로그인 화면이 닫혔어요")));
+    wc.on("destroyed", closed);
   });
 }
 
 /** Signs in to the AI site with the portal session in a hidden window; only a lapsed session shows the login page. */
-async function aiLogin(ses: Session, opener: Opener, status: Status): Promise<void> {
+async function aiLogin(ses: Session, hidden: Hidden, opener: Opener, status: Status): Promise<void> {
   if ((await siteFetch(ses, "/api/proxy/members/me")).status === 200) return;
   status("고대 AI에 연결하는 중이에요");
-  const hidden = hiddenAiLogin(ses);
   try {
-    await Promise.all([waitForAiLogin(hidden.webContents, ses, SILENT_LOGIN_MS), hidden.loadURL(`${SITE}/auth`).catch(() => undefined)]);
+    await hidden((wc) => Promise.all([waitForAiLogin(wc, ses, SILENT_LOGIN_MS), wc.loadURL(`${SITE}/auth`).catch(() => undefined)]));
     return;
   } catch {
     // The portal asked for the password again; the student signs in on the school page instead.
-  } finally {
-    if (!hidden.isDestroyed()) hidden.destroy();
   }
   status("왼쪽 학교 화면에서 로그인해 주세요");
   const wc = opener.open(`${SITE}/auth`);
@@ -149,8 +139,8 @@ async function aiLogin(ses: Session, opener: Opener, status: Status): Promise<vo
   }
 }
 
-async function issueKey(ses: Session, opener: Opener, status: Status): Promise<string> {
-  await aiLogin(ses, opener, status);
+async function issueKey(ses: Session, hidden: Hidden, opener: Opener, status: Status): Promise<string> {
+  await aiLogin(ses, hidden, opener, status);
   status("키를 받는 중이에요");
   let res: { status: number; body: unknown };
   try {
@@ -172,6 +162,8 @@ export class GatewayClient {
   private key: string | null = null;
   private model: string | null = null;
   private busy = false;
+
+  constructor(private readonly hidden: Hidden) {}
 
   async restore(): Promise<void> {
     // Without a stored key there is nothing to decrypt, so the keychain is not touched at startup.
@@ -208,7 +200,7 @@ export class GatewayClient {
         if (!v.rejected) throw new Error(`지금은 키를 확인할 수 없어요 (HTTP ${v.status})`);
       }
       const ses = schoolSession();
-      const key = await issueKey(ses, opener, status);
+      const key = await issueKey(ses, this.hidden, opener, status);
       await saveKey(key);
       await ses.clearStorageData({ origin: SITE });
       const v = await verifyKey(key);
