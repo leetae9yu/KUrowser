@@ -1,0 +1,7 @@
+node_modules/
+dist/
+out/
+release/
+.omo/
+*.env
+KU_LMS.env
