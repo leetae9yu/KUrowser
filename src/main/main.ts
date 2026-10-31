@@ -168,8 +168,10 @@ async function chat(text: string): Promise<ChatReply> {
     }
     const open = (): boolean => !!pane.open(pageUrl(CANVAS_ORIGIN, route.topic, courseId(route.course), ATTENDANCE_TOOL_ID));
     switch (route.kind) {
-      case "write":
-        open();
+      case "write": {
+        const next = route.topic === "deadlines" ? nextAssignmentUrl(courseId(route.course)) : null;
+        if (!next || !pane.open(next)) open();
+      }
         return { kind: "refused", text: "제출, 출석, 글쓰기처럼 학교에 무언가를 바꾸는 일은 앱이 하지 않아요. 왼쪽 학교 화면에서 직접 해 주세요." };
       case "command": {
         const command = commandOf(route);
@@ -184,6 +186,17 @@ async function chat(text: string): Promise<ChatReply> {
   } catch (error) {
     return { kind: "error", text: error instanceof Error ? error.message : "AI에 묻지 못했어요" };
   }
+}
+
+/** The open assignment of a course that is due first; none without a course, since a guess could open the wrong one. */
+function nextAssignmentUrl(courseId: string | undefined): string | null {
+  if (!courseId) return null;
+  const now = Date.now();
+  const next = lms
+    .snapshot()
+    .assignments.filter((a) => a.courseId === courseId && !a.submitted && Date.parse(a.due) > now)
+    .sort((a, b) => a.due.localeCompare(b.due))[0];
+  return next ? lms.url("assignment", next.id) : null;
 }
 
 function ffmpegPath(): string {
