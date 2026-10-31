@@ -1,8 +1,7 @@
-import type { ReadCommand } from "../shared/types";
-import { shortCourseName, type Assignment, type Course, type Data, type FileItem, type Lecture, type Notice, type Recording } from "./data";
+import type { PortalNotice, ReadCommand, ScheduleEntry, SchoolMenu, SitesSnapshot } from "../shared/types";
+import { shortCourseName, type Theme, type Assignment, type Course, type Data, type FileItem, type Lecture, type Notice, type Recording } from "./data";
 import { addDays, today0, weekStart } from "./format";
 import type { Route } from "./router";
-import type { Theme } from "./store";
 
 export type Outcome =
   | { kind: "deadlines"; title: string; assignments: Assignment[]; lectures: Lecture[] }
@@ -14,6 +13,9 @@ export type Outcome =
   | { kind: "recordings"; title: string; items: Recording[] }
   | { kind: "navigate"; title: string; route: Route }
   | { kind: "theme"; title: string; theme: Theme }
+  | { kind: "portal"; title: string; items: PortalNotice[] }
+  | { kind: "schedule"; title: string; items: ScheduleEntry[] }
+  | { kind: "menus"; title: string; items: SchoolMenu[] }
   | { kind: "unknown"; title: string };
 
 export interface Snapshot {
@@ -26,7 +28,15 @@ export type Parsed =
   | { kind: "read"; command: ReadCommand; start?: boolean }
   | { kind: "recordings"; course?: string }
   | { kind: "theme"; theme: Theme; title: string }
-  | { kind: "navigate"; route: Route; title: string };
+  | { kind: "navigate"; route: Route; title: string }
+  | { kind: "portal" }
+  | { kind: "schedule"; word?: string }
+  | { kind: "menu"; menu: SchoolMenu }
+  | { kind: "menus" };
+
+const OPEN_WORDS = ["열어", "열기", "화면", "들어가", "바로가기", "가줘", "켜줘", "페이지"];
+/** Calendar words a student asks the registrar's calendar about; the first match also filters the answer. */
+const SCHEDULE_WORDS = ["중간고사", "기말고사", "수강신청", "수강정정", "수강포기", "개강", "종강", "방학", "휴학", "복학", "등록", "졸업", "전과", "이중전공", "복수전공", "공휴일"];
 
 const has = (s: string, ...words: string[]) => words.some((w) => s.includes(w));
 
@@ -43,9 +53,22 @@ function rangeOf(s: string): Extract<ReadCommand, { command: "deadlines" }>["ran
   return "week";
 }
 
-export function parseRules(raw: string, data: Data): Parsed {
+/** School-site sentences: a page to open on the left, the academic calendar, or the portal board. */
+function parseSites(s: string, sites: SitesSnapshot | undefined): Parsed | null {
+  const menu = sites?.menus.find((m) => m.words.some((w) => s.includes(w)));
+  if (menu && has(s, ...OPEN_WORDS)) return { kind: "menu", menu };
+  if (has(s, "메뉴", "바로가기", "학교사이트")) return { kind: "menus" };
+  const word = SCHEDULE_WORDS.find((w) => s.includes(w));
+  if (has(s, "학사일정", "학사력", "학사달력") || (word && !has(s, "과제", "숙제", "제출"))) return { kind: "schedule", word };
+  if (has(s, "학교공지", "포털", "학사공지", "전체공지", "학교소식", "kupid")) return { kind: "portal" };
+  return null;
+}
+
+export function parseRules(raw: string, data: Data, sites?: SitesSnapshot): Parsed {
   const s = raw.toLowerCase().replace(/\s+/g, "");
   const course = findCourse(s, data)?.name;
+  const site = parseSites(s, sites);
+  if (site) return site;
 
   if (has(s, "다크", "어둡", "어두운", "밤모드")) return { kind: "theme", theme: "dark", title: "어두운 화면으로 바꿨어요" };
   if (has(s, "라이트", "밝게", "밝은")) return { kind: "theme", theme: "light", title: "밝은 화면으로 바꿨어요" };
@@ -81,6 +104,38 @@ function rangeDates(range: Extract<ReadCommand, { command: "deadlines" }>["range
     case "week":
       return { from: now, to: addDays(today0, 8), label: "앞으로 7일" };
   }
+}
+
+/** The last Hangul syllable ends in a consonant (이/가 choice). */
+const hasFinal = (word: string): boolean => {
+  const code = word.charCodeAt(word.length - 1) - 0xac00;
+  return code >= 0 && code < 11172 && code % 28 !== 0;
+};
+
+const day = (d: Date): string => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+
+/** Portal notices: the new ones, or the latest few when none is new. */
+export function portalOutcome(sites: SitesSnapshot, read: Set<string>): Outcome {
+  const all = sites.portal.data.notices;
+  const unread = all.filter((n) => !n.read && !read.has(n.id));
+  if (!all.length) return { kind: "portal", title: sites.portal.error ?? "학교 공지를 아직 못 가져왔어요", items: [] };
+  return unread.length
+    ? { kind: "portal", title: `새 학교 공지 ${unread.length}건이에요`, items: unread }
+    : { kind: "portal", title: "새 학교 공지는 없어요. 최근 공지예요", items: all.slice(0, 5) };
+}
+
+/** Calendar lines that have not ended yet, soonest first; a calendar word narrows them to that event. */
+export function scheduleOutcome(sites: SitesSnapshot, word?: string, today = new Date()): Outcome {
+  const now = day(today);
+  const upcoming = sites.portal.data.schedule.filter((e) => e.end >= now);
+  if (word) {
+    const hits = sites.portal.data.schedule.filter((e) => e.event.replace(/\s+/g, "").includes(word));
+    const next = hits.filter((e) => e.end >= now);
+    const items = next.length ? next : hits.slice(-1);
+    return { kind: "schedule", title: items.length ? `${word} 일정이에요` : `이번 학기 학사 일정에 ${word}${hasFinal(word) ? "이" : "가"} 없어요`, items };
+  }
+  if (!sites.portal.data.schedule.length) return { kind: "schedule", title: sites.portal.error ?? "학사 일정을 아직 못 가져왔어요", items: [] };
+  return { kind: "schedule", title: upcoming.length ? "다가오는 학사 일정이에요" : "이번 학기 학사 일정이 끝났어요", items: upcoming.slice(0, 6) };
 }
 
 /** Recorded lectures, newest week first, for the subtitles+summary card. */

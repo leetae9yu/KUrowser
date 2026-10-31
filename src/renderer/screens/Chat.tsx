@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ChatReply, ReadCommand } from "../../shared/types";
-import { outcomeFor, parseRules, recordingsOutcome, type Outcome, type Parsed } from "../commands";
+import { outcomeFor, parseRules, portalOutcome, recordingsOutcome, scheduleOutcome, type Outcome, type Parsed } from "../commands";
 import { CommandInput } from "../components/CommandInput";
 import { ResultCard } from "../components/ResultCard";
 import { suggestionsFor } from "../data";
@@ -107,7 +107,11 @@ export function Chat({ active }: { active: boolean }) {
   // A request that needs data still loading waits for it instead of answering "none" from an empty list.
   const waiting = (rules: Parsed): boolean => {
     const snap = latest.current.snapshot;
-    if (rules.kind === "theme" || rules.kind === "navigate") return false;
+    if (rules.kind === "theme" || rules.kind === "navigate" || rules.kind === "menu" || rules.kind === "menus") return false;
+    if (rules.kind === "portal" || rules.kind === "schedule") {
+      const portal = latest.current.sites.portal;
+      return !portal.fetchedAt && !portal.error;
+    }
     if (snap.phase === "error") return false;
     if (snap.phase !== "ready") return true;
     // A part shown from the last run answers at once; only a part that never loaded makes the request wait.
@@ -122,7 +126,7 @@ export function Chat({ active }: { active: boolean }) {
   useEffect(() => {
     const text = queued.current[0];
     if (!text || busy) return;
-    if (waiting(parseRules(text, store.data))) return;
+    if (waiting(parseRules(text, store.data, store.sites))) return;
     queued.current = queued.current.slice(1);
     void send(text, false);
   });
@@ -131,10 +135,11 @@ export function Chat({ active }: { active: boolean }) {
     if (busy) return;
     if (echo) push({ from: "user", text });
     const s = latest.current;
-    const rules = parseRules(text, s.data);
+    const rules = parseRules(text, s.data, s.sites);
     if (waiting(rules)) {
       queued.current = [...queued.current, text];
-      const login = s.snapshot.phase === "login" || s.snapshot.phase === "keychain";
+      const site = rules.kind === "portal" || rules.kind === "schedule";
+      const login = !site && (s.snapshot.phase === "login" || s.snapshot.phase === "keychain");
       push({ from: "app", kind: "text", text: login ? "학교 로그인이 끝나면 이어서 할게요" : "아직 불러오는 중이에요. 끝나면 이어서 할게요", tone: "plain" });
       return;
     }
@@ -150,6 +155,29 @@ export function Chat({ active }: { active: boolean }) {
     }
     if (rules.kind === "recordings") {
       push({ from: "app", kind: "result", outcome: recordingsOutcome(s.data, rules.course) });
+      return;
+    }
+    if (rules.kind === "portal") {
+      push({ from: "app", kind: "result", outcome: portalOutcome(s.sites, s.read) });
+      return;
+    }
+    if (rules.kind === "schedule") {
+      push({ from: "app", kind: "result", outcome: scheduleOutcome(s.sites, rules.word) });
+      return;
+    }
+    if (rules.kind === "menus") {
+      push({ from: "app", kind: "result", outcome: { kind: "menus", title: "어느 학교 화면을 열까요?", items: s.sites.menus } });
+      return;
+    }
+    if (rules.kind === "menu") {
+      const opened = await api().openMenu(rules.menu.id);
+      const ams = rules.menu.url.includes("ams.korea.ac.kr");
+      push({
+        from: "app",
+        kind: "text",
+        text: opened ? `왼쪽에 ${rules.menu.label} 화면을 열었어요${ams ? ". 학사시스템은 메일로 온 인증번호를 한 번 넣어야 해요" : ""}` : "그 화면을 열지 못했어요",
+        tone: "plain",
+      });
       return;
     }
     const snap = { watched: s.watched, read: s.read, downloaded: s.downloaded };

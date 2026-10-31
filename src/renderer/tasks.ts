@@ -1,10 +1,10 @@
-import { Bell, Download, ExternalLink, Megaphone, Play } from "lucide-react";
+import { Bell, CalendarDays, Download, ExternalLink, Megaphone, Play, School } from "lucide-react";
 import { useMemo } from "react";
 import { courseOf, type CourseId, type FileItem, type Notice } from "./data";
 import { humanTime } from "./format";
 import { jobFor, useStore } from "./store";
 
-export type TaskKind = "assignment" | "lecture" | "files" | "notices" | "remind";
+export type TaskKind = "assignment" | "lecture" | "files" | "notices" | "remind" | "portal" | "schedule";
 
 export interface Task {
   id: string;
@@ -25,7 +25,7 @@ export interface Task {
 const DAY = 86_400_000;
 
 export function useTasks(): Task[] {
-  const { data, settings, opened, watched, read, reminders, jobs, openAssignment, watch, download, markRead, summarize, remind } = useStore();
+  const { data, sites, settings, opened, watched, read, reminders, jobs, openAssignment, watch, download, markRead, summarize, remind, openSchoolPage } = useStore();
   return useMemo(() => {
     const now = Date.now();
     const list: (Task & { rank: number; at: number })[] = [];
@@ -123,6 +123,46 @@ export function useTasks(): Task[] {
       });
     }
 
+    const portalNew = sites.portal.data.notices.filter((n) => !n.read && !read.has(n.id));
+    if (portalNew.length) {
+      list.push({
+        id: "portal",
+        kind: "portal",
+        headline: `학교 공지 ${portalNew.length}개가 새로 올라왔어요`,
+        detail: portalNew.slice(0, 3).map((n) => n.title).join("\n"),
+        action: "다 읽었어요",
+        icon: School,
+        doneLine: `학교 공지 ${portalNew.length}개를 확인했어요`,
+        doing: `학교 공지 ${portalNew.length}개 확인하는 중`,
+        auto: true,
+        run: () => markRead(portalNew.map((n) => n.id)),
+        rank: 1,
+        at: 3,
+      });
+    }
+
+    // An academic calendar line starting within three days, shown once until the student opens it.
+    const soon = sites.portal.data.schedule.find((e) => {
+      const start = new Date(`${e.start}T00:00:00`).getTime();
+      return start >= now - DAY && start - now < 3 * DAY && !opened.has(`s-${e.start}-${e.event}`);
+    });
+    if (soon) {
+      list.push({
+        id: `s-${soon.start}-${soon.event}`,
+        kind: "schedule",
+        headline: `학사 일정: ${soon.event}`,
+        detail: `${Number(soon.start.slice(5, 7))}월 ${soon.label}`,
+        action: "학사 일정 보기",
+        icon: CalendarDays,
+        doneLine: "학사 일정 화면을 열었어요",
+        doing: "학사 일정 여는 중",
+        auto: false,
+        run: () => openSchoolPage("calendar", `s-${soon.start}-${soon.event}`),
+        rank: 2,
+        at: new Date(`${soon.start}T00:00:00`).getTime(),
+      });
+    }
+
     const noAlarm = due.filter((a) => !reminders.has(a.id));
     if (noAlarm.length && settings?.notifyDue !== false) {
       list.push({
@@ -142,5 +182,5 @@ export function useTasks(): Task[] {
     }
 
     return list.sort((a, b) => a.rank - b.rank || a.at - b.at);
-  }, [data, settings, opened, watched, read, reminders, jobs, openAssignment, watch, download, markRead, summarize, remind]);
+  }, [data, sites, settings, opened, watched, read, reminders, jobs, openAssignment, watch, download, markRead, summarize, remind, openSchoolPage]);
 }

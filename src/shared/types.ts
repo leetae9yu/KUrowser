@@ -96,6 +96,52 @@ export interface Snapshot {
   fetchedAt: string | null;
 }
 
+/** A post on the school portal's notice board (Seoul campus). */
+export interface PortalNotice {
+  id: string;
+  title: string;
+  office: string;
+  postedAt: string;
+  /** The board's own short summary. */
+  preview: string;
+  /** The post text, read for the newest posts only; empty until read. */
+  body: string;
+  url: string;
+  pinned: boolean;
+  files: number;
+  read?: boolean;
+}
+
+/** One line of the registrar's academic calendar; dates are `YYYY-MM-DD`. */
+export interface ScheduleEntry {
+  start: string;
+  end: string;
+  /** The date as the registrar writes it, such as `14(월)~18(금)`. */
+  label: string;
+  event: string;
+}
+
+/** A school page the chat can open on the left. */
+export interface SchoolMenu {
+  id: string;
+  label: string;
+  /** Words (no spaces) a sentence may use for it. */
+  words: string[];
+  url: string;
+}
+
+export interface SiteState<T> {
+  data: T;
+  fetchedAt: string | null;
+  error: string | null;
+}
+
+/** School sites besides the LMS, read with the same portal login; each part loads and fails on its own. */
+export interface SitesSnapshot {
+  portal: SiteState<{ notices: PortalNotice[]; schedule: ScheduleEntry[] }>;
+  menus: SchoolMenu[];
+}
+
 export interface PaneState {
   open: boolean;
   wide: boolean;
@@ -168,4 +214,10 @@ export interface KurowserApi {
   openFolder(path: string): Promise<void>;
   /** The window shows its first real screen (school data or the sign-in screen); the app records how long that took. */
   firstScreen(): Promise<void>;
+  sites(): Promise<SitesSnapshot>;
+  onSites(fn: (s: SitesSnapshot) => void): () => void;
+  refreshSites(): Promise<void>;
+  /** Opens a school page from `SitesSnapshot.menus` on the left; false when that menu does not exist. */
+  openMenu(id: string): Promise<boolean>;
+  openPortalNotice(id: string): Promise<void>;
 }
