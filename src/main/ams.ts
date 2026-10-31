@@ -17,11 +17,23 @@ export type AmsPost = (path: string, form: URLSearchParams) => Promise<SiteRespo
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
-/** Where the hidden window stands while signing in to the academic system. */
-type Stage = "mail" | "password" | "ams" | "other";
+const pathShape = (url: string): string => {
+  try {
+    const u = new URL(url);
+    return `${u.host}${u.pathname.replace(/\d+/g, "N")}${u.search ? `?${[...u.searchParams.keys()].join(",")}` : ""}`;
+  } catch {
+    return "?";
+  }
+};
 
+/** Where the hidden window stands while signing in to the academic system. */
+type Stage = "mail" | "password" | "ams" | "landed" | "other";
+
+/** `landed`: the AMS entry page the relay ends on; on the way in, the window also passes it between redirects. */
 const STAGE_SCRIPT = `(() => {
   if (location.host === "ams.korea.ac.kr" && !location.pathname.startsWith("/exsignon/")) return "ams";
+  if (location.host === "ams.korea.ac.kr" && location.pathname.startsWith("/exsignon/main/") && document.readyState === "complete") return "landed";
+  if (location.host === "portal.korea.ac.kr" && location.pathname.startsWith("/login")) return "password";
   if (location.host !== "sso.korea.ac.kr") return "other";
   if (document.querySelector('input[type=password]:not([type=hidden]), #ipt_password')) return "password";
   if (document.getElementById("sso_option_change") && typeof window.otpReq === "function") return "mail";
@@ -65,6 +77,8 @@ export interface AmsDeps {
   /** Lends the shared hidden school window; the sign-in holds it while the student reads the mail. */
   hidden: <T>(job: (wc: WebContents) => Promise<T>) => Promise<T>;
   onChange: (state: AmsState) => void;
+  /** Re-saves the school's session cookies: the sign-in replaces the SSO cookies with session-only ones. */
+  keepLogin: () => Promise<void>;
 }
 
 /**
@@ -84,7 +98,7 @@ export class AmsService {
   }
 
   private set(change: Partial<AmsState>): void {
-    this.state = { ...this.state, ...change };
+    this.state = { ...this.state, needsLogin: undefined, ...change };
     this.deps.onChange(this.state);
   }
 
@@ -118,6 +132,7 @@ export class AmsService {
       if (!(await this.sessionAlive())) {
         const ok = await this.signIn();
         if (!ok) return;
+        await this.deps.keepLogin();
       }
       this.set({ phase: "loading", message: undefined });
       this.set({ phase: "ready", data: await this.read(), at: new Date().toISOString() });
@@ -135,47 +150,64 @@ export class AmsService {
   /** The mail-code sign-in, start to finish, inside one turn of the shared hidden window. */
   private signIn(): Promise<boolean> {
     return this.deps.hidden(async (wc) => {
-      this.set({ phase: "sending", message: undefined, mask: undefined });
-      await wc.loadURL(AMS_ENTRY).catch(() => undefined);
-      const stage = await waitStage(wc, ["mail", "password", "ams"], PAGE_WAIT_MS);
-      if (stage === "ams") return this.waitSession();
-      if (stage !== "mail") {
-        this.set({ phase: "error", message: stage === "password" ? "포털 로그인이 풀려서 학사시스템에 들어가지 못했어요. 학교 로그인을 다시 해 주세요" : "학사시스템 로그인 화면을 열지 못했어요" });
-        return false;
+      // Dev runs can log the path shape of each page the sign-in passes (no query values, digits masked).
+      const trace = process.env.KUROWSER_LOG_BLOCKED ? (_e: unknown, url: string) => console.log(`AMS_NAV ${pathShape(url)}`) : null;
+      if (trace) wc.on("did-navigate", trace);
+      try {
+        return await this.signInSteps(wc);
+      } finally {
+        if (trace && !wc.isDestroyed()) wc.off("did-navigate", trace);
+        // The AMS page keeps retrying its own (blocked) lookups; leave the shared window on a blank page.
+        if (!wc.isDestroyed()) await wc.loadURL("about:blank").catch(() => undefined);
       }
-      const sent = (await wc.executeJavaScript(SEND_SCRIPT).catch(() => ({ ok: false, message: "" }))) as { ok: boolean; mask?: string; message?: string };
-      if (!sent.ok) {
-        this.set({ phase: "error", message: sent.message || "인증번호를 보내지 못했어요" });
-        return false;
-      }
-      for (let tries = 0; ; tries++) {
-        this.set({ phase: "code", mask: sent.mask, message: tries ? "인증번호가 맞지 않아요. 다시 넣어 주세요" : undefined });
-        const code = await new Promise<string | null>((resolve) => {
-          const timer = setTimeout(() => resolve(null), CODE_WAIT_MS);
-          this.code = (value) => {
-            clearTimeout(timer);
-            this.code = null;
-            resolve(value);
-          };
-        });
-        if (code === null) {
-          this.set({ phase: "error", message: "인증번호를 받지 못해서 멈췄어요. 다시 시도하면 새 번호를 보내요" });
-          return false;
-        }
-        this.set({ phase: "verifying", message: undefined });
-        const checked = (await wc.executeJavaScript(verifyScript(code)).catch(() => ({ ok: false }))) as { ok: boolean; message?: string };
-        if (checked.ok) break;
-        if (tries >= 2) {
-          this.set({ phase: "error", message: checked.message || "인증번호가 맞지 않아요" });
-          return false;
-        }
-      }
-      if ((await waitStage(wc, ["ams"], SESSION_WAIT_MS)) !== "ams") {
-        this.set({ phase: "error", message: "학사시스템으로 넘어가지 못했어요" });
-        return false;
-      }
-      return this.waitSession();
     });
+  }
+
+  private async signInSteps(wc: WebContents): Promise<boolean> {
+    this.set({ phase: "sending", message: undefined, mask: undefined });
+    await wc.loadURL(AMS_ENTRY).catch(() => undefined);
+    const stage = await waitStage(wc, ["mail", "password", "ams"], PAGE_WAIT_MS);
+    if (stage === "ams") return this.waitSession();
+    if (stage !== "mail") {
+      this.set(
+        stage === "password"
+          ? { phase: "error", needsLogin: true, message: "포털 로그인이 풀렸어요. 왼쪽 학교 화면에서 로그인과 메일 인증을 끝낸 뒤 [다시 읽기]를 눌러 주세요" }
+          : { phase: "error", message: "학사시스템 로그인 화면을 열지 못했어요" },
+      );
+      return false;
+    }
+    const sent = (await wc.executeJavaScript(SEND_SCRIPT).catch(() => ({ ok: false, message: "" }))) as { ok: boolean; mask?: string; message?: string };
+    if (!sent.ok) {
+      this.set({ phase: "error", message: sent.message || "인증번호를 보내지 못했어요" });
+      return false;
+    }
+    for (let tries = 0; ; tries++) {
+      this.set({ phase: "code", mask: sent.mask, message: tries ? "인증번호가 맞지 않아요. 다시 넣어 주세요" : undefined });
+      const code = await new Promise<string | null>((resolve) => {
+        const timer = setTimeout(() => resolve(null), CODE_WAIT_MS);
+        this.code = (value) => {
+          clearTimeout(timer);
+          this.code = null;
+          resolve(value);
+        };
+      });
+      if (code === null) {
+        this.set({ phase: "error", message: "인증번호를 받지 못해서 멈췄어요. 다시 시도하면 새 번호를 보내요" });
+        return false;
+      }
+      this.set({ phase: "verifying", message: undefined });
+      const checked = (await wc.executeJavaScript(verifyScript(code)).catch(() => ({ ok: false }))) as { ok: boolean; message?: string };
+      if (checked.ok) break;
+      if (tries >= 2) {
+        this.set({ phase: "error", message: checked.message || "인증번호가 맞지 않아요" });
+        return false;
+      }
+    }
+    if (!["ams", "landed"].includes(await waitStage(wc, ["ams", "landed"], SESSION_WAIT_MS))) {
+      this.set({ phase: "error", message: "학사시스템으로 넘어가지 못했어요" });
+      return false;
+    }
+    return this.waitSession();
   }
 
   /** After the relay lands on AMS, the application session opens with three plain GETs (as the AMS page does). */

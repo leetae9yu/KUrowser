@@ -184,6 +184,8 @@ export interface AmsState {
   phase: "idle" | "sending" | "code" | "verifying" | "loading" | "ready" | "error";
   mask?: string;
   message?: string;
+  /** The portal login itself lapsed; the student signs in on the school page, then reads again. */
+  needsLogin?: boolean;
   data: AmsSummary | null;
   at: string | null;
 }

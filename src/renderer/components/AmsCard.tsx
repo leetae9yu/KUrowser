@@ -1,4 +1,4 @@
-import { KeyRound, LoaderCircle, RefreshCw } from "lucide-react";
+import { ExternalLink, KeyRound, LoaderCircle, RefreshCw } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import type { AmsSummary } from "../../shared/types";
 import { api, useStore } from "../store";
@@ -118,9 +118,15 @@ export function AmsCard({ topic }: { topic: AmsTopic }) {
       <>
         <p className="hero-sub">{ams.message ?? "학사시스템을 읽지 못했어요"}</p>
         <div className="stage-actions">
-          <button type="button" className="btn btn-lg btn-primary" onClick={() => void api().amsStart()}>
+          {ams.needsLogin && (
+            <button type="button" className="btn btn-lg btn-primary" onClick={() => void api().openMenu(topic === "timetable" ? "timetable" : "grades")}>
+              <ExternalLink size={18} aria-hidden="true" />
+              <span>왼쪽에서 로그인하기</span>
+            </button>
+          )}
+          <button type="button" className={`btn btn-lg ${ams.needsLogin ? "btn-tonal" : "btn-primary"}`} onClick={() => void api().amsStart()}>
             <RefreshCw size={18} aria-hidden="true" />
-            <span>다시 시도</span>
+            <span>{ams.needsLogin ? "다시 읽기" : "다시 시도"}</span>
           </button>
         </div>
       </>

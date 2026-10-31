@@ -50,5 +50,8 @@ describe("hidden engine window", () => {
     expect(engineRequestAllowed("POST", "https://ams.korea.ac.kr/exsignon/sso/sso_identify.jsp", doc)).toBe(true);
     expect(engineRequestAllowed("POST", "https://ams.korea.ac.kr/exsignon/sso/logout.jsp", doc)).toBe(false);
     expect(engineRequestAllowed("POST", "https://ams.korea.ac.kr/sch/sles/SlesstCtr/findStdAppcsDtlsList.do", "xhr")).toBe(false);
+    expect(engineRequestAllowed("POST", "https://lms.korea.ac.kr/exsignon_new/sso/sso_identify.php", doc)).toBe(true);
+    expect(engineRequestAllowed("POST", "https://lms.korea.ac.kr/exsignon_new/sso/sso_identify.php", "xhr")).toBe(false);
+    expect(engineRequestAllowed("POST", "https://lms.korea.ac.kr/anything", doc)).toBe(false);
   });
 });

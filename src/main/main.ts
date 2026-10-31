@@ -69,7 +69,7 @@ const sites = new SitesService({
   cache: sitesCache,
   readNotices: () => new Set(store.get().readNotices),
 });
-const ams = new AmsService({ get: siteGet, post: amsPost, hidden, onChange: (state) => send("ams", state) });
+const ams = new AmsService({ get: siteGet, post: amsPost, hidden, onChange: (state) => send("ams", state), keepLogin: () => keepLogin() });
 const lms = new LmsService({
   engine,
   cache: lmsCache,

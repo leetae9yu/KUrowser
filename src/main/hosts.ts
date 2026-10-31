@@ -63,6 +63,8 @@ export function engineRequestAllowed(method: string, url: string, resourceType: 
   if (u?.protocol === "https:" && u.hostname === "sso.korea.ac.kr" && SSO_MAIL_CODE.has(u.pathname)) return true;
   if (!DOCUMENT_TYPES.has(resourceType)) return false;
   if (u?.protocol === "https:" && u.hostname === "ams.korea.ac.kr") return AMS_RELAY.test(u.pathname);
+  // The LMS sign-in relay the SSO posts back to (observed on a password sign-in in the hidden window).
+  if (u?.protocol === "https:" && u.hostname === "lms.korea.ac.kr") return u.pathname === "/exsignon_new/sso/sso_identify.php";
   if (!u || u.protocol !== "https:" || !isSchoolHost(u.hostname)) return false;
   if (u.hostname === "sso.korea.ac.kr") return true;
   if (u.hostname !== "mylms.korea.ac.kr" && u.hostname !== "canvas.korea.ac.kr") return false;
