@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, net, protocol, shell, type IpcMainInvokeEvent } from "electron";
+import { app, BrowserWindow, ipcMain, net, protocol, safeStorage, shell, type IpcMainInvokeEvent } from "electron";
 import { mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, normalize, sep } from "node:path";
@@ -20,6 +20,8 @@ const APP_ORIGIN = "app://kurowser";
 const DIST_DIR = join(app.getAppPath(), "dist");
 const RENDERER_DIR = join(DIST_DIR, "renderer");
 const STALE_MS = 10 * 60 * 1000;
+/** Longer than a normal keychain read; past this the OS is most likely showing an allow prompt. */
+const KEYCHAIN_HINT_MS = 2500;
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -43,7 +45,10 @@ const lms = new LmsService({
   readNotices: () => new Set(store.get().readNotices),
   summaries: () => store.get().summaries,
   reminders: () => store.get().reminders.map((r) => r.id),
-  onLogin: () => keepLogin(),
+  onLogin: async () => {
+    if (!store.get().signedInBefore) store.update((s) => (s.signedInBefore = true));
+    await keepLogin();
+  },
 });
 
 function send(channel: string, payload: unknown): void {
@@ -61,7 +66,13 @@ function serveRenderer(): void {
 }
 
 function settings(): Settings {
-  return { notifyDue: store.get().notifyDue, downloadDir: downloadDir(), aiConnected: gateway.connected, aiLabel: gateway.label };
+  return {
+    notifyDue: store.get().notifyDue,
+    downloadDir: downloadDir(),
+    aiConnected: gateway.connected,
+    aiLabel: gateway.label,
+    signedInBefore: store.get().signedInBefore,
+  };
 }
 
 function handle<A extends unknown[], R>(channel: string, fn: (...args: A) => Promise<R> | R): void {
@@ -210,11 +221,26 @@ app.whenReady().then(async () => {
   }
   registerIpc();
   lms.subscribe((snapshot) => send("snapshot", snapshot));
-  await gateway.restore();
   reminders.start();
+  // The window comes first. Reading the stored AI key or the cookie key can wait on a macOS keychain
+  // prompt (an unsigned or re-signed build asks again), and that wait must not keep the app windowless.
   mainWindow = createMainWindow();
-  void lms.refresh();
+  void startLoading();
 });
+
+/**
+ * The cookie store and the AI key share one OS key. When macOS asks whether the app may read it (after an
+ * update of an app without a team id), every school request waits on that prompt, so the first load waits for
+ * the answer and the window explains the prompt meanwhile. A denied key leaves the cookies unreadable, and the
+ * load then ends on the sign-in screen.
+ */
+async function startLoading(): Promise<void> {
+  const hint = setTimeout(() => lms.waitingForKeychain(), KEYCHAIN_HINT_MS);
+  await safeStorage.isAsyncEncryptionAvailable().catch(() => false);
+  clearTimeout(hint);
+  void gateway.restore();
+  void lms.refresh();
+}
 
 app.on("activate", () => {
   if (!mainWindow || mainWindow.isDestroyed()) mainWindow = createMainWindow();

@@ -14,9 +14,11 @@ export interface AppState {
   reminders: Reminder[];
   firedReminders: string[];
   notifyDue: boolean;
+  /** The student finished a school login in this app at least once; a later login screen asks to sign in again. */
+  signedInBefore: boolean;
 }
 
-const EMPTY: AppState = { readNotices: [], summaries: {}, reminders: [], firedReminders: [], notifyDue: true };
+const EMPTY: AppState = { readNotices: [], summaries: {}, reminders: [], firedReminders: [], notifyDue: true, signedInBefore: false };
 
 export class StateStore {
   private value: AppState;

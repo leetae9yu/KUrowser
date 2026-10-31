@@ -91,15 +91,16 @@ export async function canvasReady(ses: Session = schoolSession()): Promise<boole
  * keychain (Linux basic_text, or an unpackaged dev run) the cookies stay session-only unless a dev
  * run opts in with KUROWSER_ALLOW_BASIC_TEXT=1.
  */
-function canPersistCookies(): boolean {
+async function canPersistCookies(): Promise<boolean> {
   const devOptIn = !app.isPackaged && process.env.KUROWSER_ALLOW_BASIC_TEXT === "1";
   if (!app.isPackaged) return devOptIn;
-  if (!safeStorage.isEncryptionAvailable()) return false;
+  // The async check waits for a keychain prompt without blocking the main process.
+  if (!(await safeStorage.isAsyncEncryptionAvailable())) return false;
   return process.platform !== "linux" || safeStorage.getSelectedStorageBackend() !== "basic_text";
 }
 
 export async function keepLogin(ses: Session = schoolSession()): Promise<void> {
-  if (!canPersistCookies()) return;
+  if (!(await canPersistCookies())) return;
   const expirationDate = Date.now() / 1000 + KEEP_LOGIN_DAYS * 86_400;
   for (const cookie of await ses.cookies.get({})) {
     const domain = (cookie.domain ?? "").replace(/^\./, "");

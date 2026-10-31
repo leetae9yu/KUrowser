@@ -82,6 +82,8 @@ export class LmsService {
   private chain: Promise<unknown> = Promise.resolve();
   private snap: Snapshot = emptySnapshot("loading");
   private raws = new Map<string, Raw>();
+  /** Attendance read while getting the LearningX token, reused by the lecture pass of the same load. */
+  private warmAttendance = new Map<string, Raw>();
   private links: Links = { assignments: new Map(), lectures: new Map(), notices: new Map(), files: new Map() };
   private listeners = new Set<(s: Snapshot) => void>();
   private refreshing: Promise<void> | null = null;
@@ -129,6 +131,11 @@ export class LmsService {
     return next;
   }
 
+  /** The first load waits on an OS keychain prompt; the window says so instead of a bare spinner. */
+  waitingForKeychain(): void {
+    if (this.snap.phase === "loading" && !this.snap.courses.length) this.set({ phase: "keychain" });
+  }
+
   refresh(): Promise<void> {
     this.refreshing ??= this.load().finally(() => {
       this.refreshing = null;
@@ -164,6 +171,7 @@ export class LmsService {
   private async loadCourses(session: ElectronBrowserSession): Promise<void> {
     const raw = await fetchCourses(session);
     this.raws = new Map(raw.map((c) => [String(c.id), c]));
+    await this.warmLearningx(session, raw);
     const courses: Course[] = raw.map((c, index) => ({
       id: String(c.id),
       name: displayName(String(c.name ?? "")),
@@ -249,7 +257,7 @@ export class LmsService {
     const links = await mapLimit(courses, COURSE_CONCURRENCY, (course) => this.moduleLinks(session, String(course.id)));
     for (const [i, course] of courses.entries()) {
       const courseId = String(course.id);
-      const attendance = await session.fetchAttendance(course.id);
+      const attendance = this.warmAttendance.get(courseId) ?? (await session.fetchAttendance(course.id));
       const pages = links[i]!;
       for (const row of unwatchedRows(course, attendance)) {
         if (!row.available) continue;
@@ -262,6 +270,22 @@ export class LmsService {
     }
     this.links = { ...this.links, lectures: urls };
     this.set({ lectures });
+  }
+
+  /**
+   * LearningX board reads need the xn_api_token cookie, which only a LearningX tool launch sets. Without it
+   * the board posts (notices and files) silently come back empty, so open one course's attendance tab first.
+   */
+  private async warmLearningx(session: ElectronBrowserSession, raw: Raw[]): Promise<void> {
+    this.warmAttendance = new Map();
+    if (await session.evaluate("document.cookie.includes('xn_api_token=')").catch(() => false)) return;
+    const first = raw.find((course) => course.workflow_state !== "unpublished");
+    if (!first) return;
+    try {
+      this.warmAttendance.set(String(first.id), await session.fetchAttendance(first.id));
+    } catch (error) {
+      if (!(error instanceof LiveCommandError)) throw error;
+    }
   }
 
   private async moduleLinks(session: ElectronBrowserSession, courseId: string): Promise<Map<string, string>> {

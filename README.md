@@ -62,9 +62,16 @@ node_modules/.bin/electron .
 
 ```bash
 bun run dist:linux   # release/KUrowser-<버전>-<빌드 머신 아키텍처>.AppImage
-bun run dist:mac     # release/KUrowser-<버전>-arm64.dmg (서명 없음, macOS에서만 실행)
+bun run dist:mac     # release/KUrowser-<버전>-arm64.dmg (자체 서명 인증서, macOS에서만 실행)
 ```
 
-`dist:mac`은 macOS에서만 돌아갑니다. fuse를 바꾼 뒤 `codesign`으로 임시 서명을 다시 하기 때문입니다. macOS용 dmg는 개발자 인증서로 서명하지 않습니다. 처음 열 때 Finder에서 앱을 Control-클릭하고 [열기]를 누르거나, 터미널에서 `xattr -dr com.apple.quarantine /Applications/KUrowser.app`를 실행해야 합니다.
+`dist:mac`은 macOS에서만 돌아갑니다. `scripts/dist-mac.sh`가 앱을 묶고(fuse 변경 포함), 고정 인증서 `KUrowser Dev`(자체 서명)로 서명한 뒤 dmg를 만듭니다. 그래서 앱의 지정 요구 사항(번들 id와 인증서)은 빌드마다 같습니다. 인증서는 맥미니의 빌드 전용 키체인에 있습니다. ssh 빌드에서는 로그인 키체인을 열 수 없기 때문입니다. 빌드할 때 `KUROWSER_SIGN_KEYCHAIN`과 `KUROWSER_SIGN_KEYCHAIN_PASS_FILE`로 그 키체인을 지정합니다. 키체인 비밀번호는 저장소에 두지 않습니다.
+
+Apple 개발자 계정으로 서명하기 전까지는 아래 한계가 남습니다.
+
+- Gatekeeper는 자체 서명 인증서를 믿지 않습니다. 처음 열 때 Finder에서 앱을 Control-클릭하고 [열기]를 누르거나, 터미널에서 `xattr -dr com.apple.quarantine /Applications/KUrowser.app`를 실행해야 합니다.
+- 업데이트한 뒤 처음 열 때마다 "KUrowser Safe Storage" 키체인 허용 창이 한 번 뜹니다. 팀 ID가 없는 앱의 키체인 항목은 빌드 해시(cdhash)에 묶이기 때문입니다. 같은 자체 서명 인증서로 서명해도 이 창은 뜹니다(맥미니 securityd 로그로 확인). 학생은 맥 암호를 넣고 [항상 허용]을 눌러야 합니다. Apple 개발자 계정의 팀 ID로 서명하면 이 창이 사라집니다.
+- 허용 창이 떠 있는 동안에도 앱은 창을 먼저 띄우고 "키체인 창에서 [항상 허용]을 눌러 주세요" 화면을 보여 줍니다. 학교 요청은 답을 받은 뒤에 시작합니다. [거부]하면 저장된 로그인을 읽지 못해서 "로그인을 다시 해 주세요" 화면으로 갑니다.
+- 쿠키를 평문으로 두는 방법(쿠키 암호화 fuse 끄기)은 쓰지 않습니다.
 
 패키징한 앱은 쿠키 암호화 fuse를 켭니다. `runAsNode`, `NODE_OPTIONS`, `--inspect`는 끄고, `app.asar`에서만 앱 코드를 읽습니다.

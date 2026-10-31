@@ -225,21 +225,41 @@ export function Home() {
 
   let screen;
   if (snapshot.phase === "login") {
+    const again = !!store.settings?.signedInBefore;
     screen = (
       <div className="stage-body">
-        <p className="eyebrow">처음 한 번만</p>
+        <p className="eyebrow">{again ? "로그인이 풀렸어요" : "처음 한 번만"}</p>
         <h1 className="hero-title">
-          학교 계정으로
+          {again ? "로그인을" : "학교 계정으로"}
           <br />
-          로그인해 주세요
+          {again ? "다시 해 주세요" : "로그인해 주세요"}
         </h1>
-        <p className="hero-sub">학교 로그인 창이 열려요. 비밀번호는 그 창에만 넣고, 앱은 받지 않아요.</p>
+        <p className="hero-sub">
+          {again
+            ? "앱을 업데이트했거나 컴퓨터가 저장된 로그인을 열지 못했어요. 학교 로그인 창에서 한 번 더 로그인해 주세요."
+            : "학교 로그인 창이 열려요. 비밀번호는 그 창에만 넣고, 앱은 받지 않아요."}
+        </p>
         <div className="stage-actions">
           <button type="button" className="btn btn-lg btn-primary" onClick={() => void store.login()}>
             <LogIn size={18} aria-hidden="true" />
             <span>로그인</span>
           </button>
         </div>
+      </div>
+    );
+  } else if (snapshot.phase === "keychain") {
+    screen = (
+      <div className="stage-body">
+        <p className="eyebrow">macOS가 묻고 있어요</p>
+        <h1 className="hero-title">
+          키체인 창에서
+          <br />
+          [항상 허용]을 눌러 주세요
+        </h1>
+        <p className="hero-sub">
+          맥 암호를 넣고 [항상 허용]을 눌러 주세요. 앱을 업데이트한 뒤 처음 열 때만 한 번 물어요. 허용하면 곧바로 할 일을
+          불러와요. [거부]를 누르면 학교 로그인을 한 번 더 하면 돼요.
+        </p>
       </div>
     );
   } else if (snapshot.phase === "loading" && !snapshot.courses.length) {

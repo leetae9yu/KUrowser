@@ -166,6 +166,8 @@ export class GatewayClient {
   private busy = false;
 
   async restore(): Promise<void> {
+    // Without a stored key there is nothing to decrypt, so the keychain is not touched at startup.
+    if (!existsSync(keyFile())) return;
     try {
       await assertKeyStoreReady();
       this.key = await loadKey();

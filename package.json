@@ -15,7 +15,7 @@
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.renderer.json",
     "test": "bun test",
     "dist:linux": "bun run build && electron-builder --linux AppImage",
-    "dist:mac": "bun run build && electron-builder --mac dmg"
+    "dist:mac": "bash scripts/dist-mac.sh"
   },
   "devDependencies": {
     "@types/bun": "^1.2.0",
