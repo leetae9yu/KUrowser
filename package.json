@@ -17,13 +17,6 @@
     "dist:linux": "bun run build && electron-builder --linux AppImage",
     "dist:mac": "bun run build && electron-builder --mac dmg"
   },
-  "dependencies": {
-    "entities": "^6.0.0",
-    "lucide-react": "^1.66.0",
-    "pretendard": "^1.3.9",
-    "react": "^19.3.1",
-    "react-dom": "^19.3.1"
-  },
   "devDependencies": {
     "@types/bun": "^1.2.0",
     "@types/node": "^24.19.2",
@@ -32,6 +25,11 @@
     "@vitejs/plugin-react": "^6.1.2",
     "electron": "45.2.1",
     "electron-builder": "^26.0.12",
+    "entities": "^6.0.0",
+    "lucide-react": "^1.66.0",
+    "pretendard": "^1.3.9",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
     "typescript": "^5.9.3",
     "vite": "^8.3.5"
   },
@@ -47,7 +45,12 @@
     ],
     "mac": {
       "target": [
-        "dmg"
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        }
       ],
       "category": "public.app-category.education",
       "identity": null
@@ -56,7 +59,8 @@
       "target": [
         "AppImage"
       ],
-      "category": "Education"
+      "category": "Education",
+      "syncDesktopName": true
     },
     "dmg": {
       "title": "KUrowser"
@@ -73,5 +77,6 @@
   },
   "trustedDependencies": [
     "electron"
-  ]
+  ],
+  "desktopName": "kurowser.desktop"
 }
