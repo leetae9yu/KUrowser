@@ -15,7 +15,8 @@
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.renderer.json",
     "test": "bun test",
     "dist:linux": "bun run build && electron-builder --linux AppImage",
-    "dist:mac": "bash scripts/dist-mac.sh"
+    "dist:mac": "bash scripts/dist-mac.sh",
+    "dist:win": "bun run build && electron-builder --win nsis"
   },
   "devDependencies": {
     "@types/bun": "^1.2.0",
@@ -61,6 +62,18 @@
       ],
       "category": "Education",
       "syncDesktopName": true
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis"
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "artifactName": "${productName}-${version}-${arch}-setup.${ext}"
     },
     "dmg": {
       "title": "KUrowser"
