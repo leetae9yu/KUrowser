@@ -29,6 +29,7 @@ const api: KurowserApi = {
   connectAi: () => ipcRenderer.invoke("connectAi"),
   onAiStatus: (fn) => listen("aiStatus", fn),
   interpret: (text) => ipcRenderer.invoke("interpret", text),
+  chat: (text) => ipcRenderer.invoke("chat", text),
 };
 
 contextBridge.exposeInMainWorld("kurowser", api);

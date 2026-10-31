@@ -91,6 +91,15 @@ export type ReadCommand =
   | { command: "courses" }
   | { command: "unknown" };
 
+/** What the main process made of a sentence the local rules could not place. */
+export type ChatReply =
+  | { kind: "command"; command: ReadCommand }
+  | { kind: "opened"; text: string }
+  | { kind: "answer"; text: string }
+  | { kind: "clarify"; text: string }
+  | { kind: "refused"; text: string }
+  | { kind: "error"; text: string };
+
 export interface KurowserApi {
   snapshot(): Promise<Snapshot>;
   refresh(): Promise<void>;
@@ -112,4 +121,5 @@ export interface KurowserApi {
   connectAi(): Promise<{ ok: boolean; text: string }>;
   onAiStatus(fn: (text: string) => void): () => void;
   interpret(text: string): Promise<{ via: "ai" | "rules"; command: ReadCommand } | null>;
+  chat(text: string): Promise<ChatReply>;
 }
