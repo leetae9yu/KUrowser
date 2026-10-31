@@ -188,6 +188,15 @@
   color: var(--text-2);
 }
 
+.bubble-done {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--accent-wash);
+  color: var(--accent);
+  font-weight: 600;
+}
+
 .typing {
   display: inline-flex;
   align-items: center;

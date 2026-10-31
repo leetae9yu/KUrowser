@@ -1,3 +1,4 @@
+import { Check } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ChatReply, ReadCommand } from "../../shared/types";
 import { outcomeFor, parseRules, portalOutcome, recordingsOutcome, scheduleOutcome, type Outcome, type Parsed } from "../commands";
@@ -8,7 +9,7 @@ import { navigate } from "../router";
 import { api, useStore } from "../store";
 import { Home } from "./Home";
 
-type Tone = "plain" | "quiet";
+type Tone = "plain" | "quiet" | "done";
 type Message =
   | { id: number; from: "user"; text: string }
   | { id: number; from: "app"; kind: "text"; text: string; tone: Tone }
@@ -45,6 +46,16 @@ function Bubble({ message, onRun }: { message: Message; onRun: (text: string) =>
         <div className="card">
           <ResultCard outcome={message.outcome} onRun={onRun} />
         </div>
+      </li>
+    );
+  }
+  if (message.tone === "done") {
+    return (
+      <li className="msg msg-app">
+        <p className="bubble bubble-app bubble-done">
+          <Check size={16} aria-hidden="true" />
+          <span>{message.text}</span>
+        </p>
       </li>
     );
   }
@@ -103,6 +114,15 @@ export function Chat({ active }: { active: boolean }) {
     seq.current += 1;
     setMessages((prev) => [...prev, { ...draft, id: seq.current }]);
   };
+
+  // Focus mode on the school page says the next step once, and checks the job off when the school shows it done.
+  useEffect(
+    () =>
+      api().onFocus((e) =>
+        push(e.kind === "done" ? { from: "app", kind: "text", text: `${e.text}. 학교 화면을 닫았어요`, tone: "done" } : { from: "app", kind: "text", text: e.text, tone: "plain" }),
+      ),
+    [],
+  );
 
   // A request that needs data still loading waits for it instead of answering "none" from an empty list.
   const waiting = (rules: Parsed): boolean => {
