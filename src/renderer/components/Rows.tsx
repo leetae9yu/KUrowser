@@ -2,7 +2,7 @@ import { Check, ChevronDown, ChevronUp, Download, ExternalLink, Play } from "luc
 import { useState } from "react";
 import { courseOf, type Assignment, type CourseId, type FileItem, type Lecture, type Notice } from "../data";
 import { ago, dueLabel, sizeLabel, urgency } from "../format";
-import { jobFor, useStore } from "../store";
+import { api, jobFor, useStore } from "../store";
 
 export function CourseTag({ id }: { id: CourseId }) {
   const c = courseOf(useStore().data, id);
@@ -99,7 +99,16 @@ export function NoticeRow({ n, showCourse = true }: { n: Notice; showCourse?: bo
           {showCourse && <CourseTag id={n.courseId} />}
           <span>{ago(n.postedAt)}</span>
         </span>
-        {open && <p className="notice-body">{n.body}</p>}
+        {n.summary && <span className="notice-summary">{n.summary}</span>}
+        {open && (
+          <>
+            {n.body && <p className="notice-body">{n.body}</p>}
+            <button type="button" className="btn btn-ghost notice-open" onClick={() => void api().openNotice(n.id)}>
+              <ExternalLink size={16} aria-hidden="true" />
+              <span>학교에서 원문 보기</span>
+            </button>
+          </>
+        )}
       </div>
       <button
         type="button"

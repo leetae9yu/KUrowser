@@ -27,6 +27,11 @@ export class ReminderScheduler {
       s.firedReminders = s.firedReminders.filter((id) => !fresh.some((f) => f.id === id));
     });
     for (const reminder of fresh) this.schedule(reminder);
+    // Show one notification now: the student sees what the reminder looks like, and macOS asks for
+    // notification permission while the student is here instead of a day before the deadline.
+    if (fresh.length && Notification.isSupported()) {
+      new Notification({ title: `마감 ${fresh.length}개에 알림을 켰어요`, body: "마감 하루 전에 이렇게 알려 드려요. 그때 앱이 켜져 있어야 해요." }).show();
+    }
     return fresh.length;
   }
 

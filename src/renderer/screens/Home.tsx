@@ -128,9 +128,19 @@ export function Home() {
     }
   }, [screenKey]);
 
+  // Files arrive after the first screen. A batch started before then waits for them and takes in their tasks.
+  const filesPending = snapshot.pending.includes("files");
+  const batchDone = !!batch && batch.step >= batch.items.length && !filesPending;
+
   useEffect(() => {
-    if (batch && batch.step >= batch.items.length) setAnnounce("끝. 자동으로 할 수 있는 일을 모두 마쳤어요");
-  }, [batch]);
+    if (batchDone) setAnnounce("끝. 자동으로 할 수 있는 일을 모두 마쳤어요");
+  }, [batchDone]);
+
+  useEffect(() => {
+    if (!batch || batch.step < batch.items.length) return;
+    const late = auto.filter((t) => !started.current.has(t.id) && !batch.items.some((i) => i.id === t.id));
+    if (late.length) setBatch({ items: [...batch.items, ...late], step: batch.step });
+  });
 
   // "Do everything": run each automatic task in order, one result line at a time.
   useEffect(() => {
@@ -299,7 +309,7 @@ export function Home() {
       </div>
     );
   } else if (mode === "batch" && batch) {
-    const finished = batch.step >= batch.items.length;
+    const finished = batchDone;
     screen = (
       <div className="stage-body">
         <h1 className="hero-title">{finished ? "끝" : "하나씩 끝내는 중이에요"}</h1>
@@ -326,6 +336,16 @@ export function Home() {
               </li>
             );
           })}
+          {!finished && batch.step >= batch.items.length && (
+            <li className="step is-now">
+              <span className="step-mark" aria-hidden="true">
+                <LoaderCircle size={16} className="spin" />
+              </span>
+              <div className="step-text">
+                <p>새 자료가 있는지 학교에서 확인하는 중</p>
+              </div>
+            </li>
+          )}
         </ol>
         {!finished && (
           <div className="stage-actions">
