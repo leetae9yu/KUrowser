@@ -18,6 +18,16 @@ describe("school sentences", () => {
     expect(parseRules("이번 주 과제 일정", noData, sites())).toMatchObject({ kind: "read", command: { command: "deadlines" } });
   });
 
+  test("LMS sentences that mention a calendar word, a menu word or a theme keep their old meaning", () => {
+    const read = (text: string) => parseRules(text, noData, sites());
+    expect(read("중간고사 공지 요약해줘")).toMatchObject({ kind: "read", command: { command: "notices" } });
+    expect(read("기말고사 관련 공지 보여줘")).toMatchObject({ kind: "read", command: { command: "notices" } });
+    expect(read("새로 등록된 자료 보여줘")).toMatchObject({ kind: "read", command: { command: "files" } });
+    expect(read("종강 전에 볼 강의")).toMatchObject({ kind: "read", command: { command: "lectures" } });
+    expect(read("강의 메뉴 보여줘")).toMatchObject({ kind: "read", command: { command: "lectures" } });
+    expect(read("시간표 화면 어둡게")).toMatchObject({ kind: "theme", theme: "dark" });
+  });
+
   test("a calendar word picks its next event", () => {
     const list = sites([
       { start: "2026-10-20", end: "2026-10-26", label: "20(화)~26(월)", event: "제2학기 중간고사" },

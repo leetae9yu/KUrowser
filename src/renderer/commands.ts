@@ -36,7 +36,7 @@ export type Parsed =
 
 const OPEN_WORDS = ["열어", "열기", "화면", "들어가", "바로가기", "가줘", "켜줘", "페이지"];
 /** Calendar words a student asks the registrar's calendar about; the first match also filters the answer. */
-const SCHEDULE_WORDS = ["중간고사", "기말고사", "수강신청", "수강정정", "수강포기", "개강", "종강", "방학", "휴학", "복학", "등록", "졸업", "전과", "이중전공", "복수전공", "공휴일"];
+const SCHEDULE_WORDS = ["중간고사", "기말고사", "수강신청", "수강정정", "수강포기", "개강", "종강", "방학", "휴학", "복학", "등록기간", "졸업", "전과", "이중전공", "복수전공", "공휴일"];
 
 const has = (s: string, ...words: string[]) => words.some((w) => s.includes(w));
 
@@ -53,25 +53,29 @@ function rangeOf(s: string): Extract<ReadCommand, { command: "deadlines" }>["ran
   return "week";
 }
 
+/** Words that name an LMS item; a sentence with one stays with the LMS rules even when it also names a calendar event. */
+const LMS_WORDS = ["공지", "자료", "파일", "강의", "녹화", "인강", "과제", "숙제", "제출", "마감", "슬라이드"];
+
 /** School-site sentences: a page to open on the left, the academic calendar, or the portal board. */
-function parseSites(s: string, sites: SitesSnapshot | undefined): Parsed | null {
+function parseSites(s: string, sites: SitesSnapshot | undefined, course: string | undefined): Parsed | null {
   const menu = sites?.menus.find((m) => m.words.some((w) => s.includes(w)));
   if (menu && has(s, ...OPEN_WORDS)) return { kind: "menu", menu };
-  if (has(s, "메뉴", "바로가기", "학교사이트")) return { kind: "menus" };
-  const word = SCHEDULE_WORDS.find((w) => s.includes(w));
-  if (has(s, "학사일정", "학사력", "학사달력") || (word && !has(s, "과제", "숙제", "제출"))) return { kind: "schedule", word };
+  if (has(s, "학교메뉴", "학교바로가기", "학교사이트")) return { kind: "menus" };
   if (has(s, "학교공지", "포털", "학사공지", "전체공지", "학교소식", "kupid")) return { kind: "portal" };
+  if (has(s, "학사일정", "학사력", "학사달력")) return { kind: "schedule", word: SCHEDULE_WORDS.find((w) => s.includes(w)) };
+  const word = SCHEDULE_WORDS.find((w) => s.includes(w));
+  if (word && !course && !has(s, ...LMS_WORDS)) return { kind: "schedule", word };
   return null;
 }
 
 export function parseRules(raw: string, data: Data, sites?: SitesSnapshot): Parsed {
   const s = raw.toLowerCase().replace(/\s+/g, "");
   const course = findCourse(s, data)?.name;
-  const site = parseSites(s, sites);
-  if (site) return site;
 
   if (has(s, "다크", "어둡", "어두운", "밤모드")) return { kind: "theme", theme: "dark", title: "어두운 화면으로 바꿨어요" };
   if (has(s, "라이트", "밝게", "밝은")) return { kind: "theme", theme: "light", title: "밝은 화면으로 바꿨어요" };
+  const site = parseSites(s, sites, course);
+  if (site) return site;
   if (has(s, "설정", "계정", "api", "로그아웃", "ai연결")) return { kind: "navigate", route: { name: "settings" }, title: "설정을 열었어요" };
   // "받아쓰기" contains "받아", so this sits before the download rule; lecture notes (강의안, 자료) stay files.
   if (has(s, "자막", "요약", "받아쓰기", "정리") && has(s, "강의", "녹화", "인강") && !has(s, "자료", "강의안", "슬라이드", "파일")) {

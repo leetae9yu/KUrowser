@@ -29,6 +29,8 @@ export class SitesService {
   private state: SitesCache;
   private listeners = new Set<(s: SitesSnapshot) => void>();
   private refreshing: Promise<void> | null = null;
+  /** Bumped at logout so a read that was running then cannot write its result back. */
+  private generation = 0;
 
   constructor(private readonly deps: SitesDeps) {
     this.state = { ...empty(), ...deps.cache.read() };
@@ -51,7 +53,8 @@ export class SitesService {
     for (const fn of this.listeners) fn(s);
   }
 
-  private set(change: Partial<SitesCache>): void {
+  private set(change: Partial<SitesCache>, generation = this.generation): void {
+    if (generation !== this.generation) return;
     const next = { ...this.state, ...change };
     if (JSON.stringify(next) === JSON.stringify(this.state)) return;
     this.state = next;
@@ -71,6 +74,7 @@ export class SitesService {
   }
 
   private async loadPortal(): Promise<void> {
+    const generation = this.generation;
     const old = this.state.portal;
     const get = this.deps.get;
     const [notices, schedule] = await Promise.allSettled([portalNotices(get), academicSchedule(get)]);
@@ -83,7 +87,7 @@ export class SitesService {
         fetchedAt: failed ? old.fetchedAt : new Date().toISOString(),
         error: failed ? friendly(failed.reason) : null,
       },
-    });
+    }, generation);
     const missing = list.slice(0, BODY_POSTS).filter((n) => !n.body);
     const queue = [...missing];
     const bodies = new Map<string, string>();
@@ -94,10 +98,11 @@ export class SitesService {
     );
     if (!bodies.size) return;
     const current = this.state.portal;
-    this.set({ portal: { ...current, data: { ...current.data, notices: current.data.notices.map((n) => (bodies.get(n.id) ? { ...n, body: bodies.get(n.id)! } : n)) } } });
+    this.set({ portal: { ...current, data: { ...current.data, notices: current.data.notices.map((n) => (bodies.get(n.id) ? { ...n, body: bodies.get(n.id)! } : n)) } } }, generation);
   }
 
   clear(): void {
+    this.generation += 1;
     this.deps.cache.clear();
     this.state = empty();
     this.emit();
