@@ -208,6 +208,7 @@ async function sttPlan(id: string): Promise<SttPlan> {
       const text = `공식 자막 사용(0크레딧), 요약 약 ${SUMMARY_CREDITS}크레딧, 남은 크레딧 ${remaining === null ? "확인 못 함" : Math.floor(remaining)}`;
       return { ok: enough, source: "captions", credits: SUMMARY_CREDITS, remaining, text: enough ? text : `${text}. 크레딧이 모자라서 시작하지 않아요` };
     }
+    if (media.duration <= 0) return { ok: false, source: "stt", text: "강의 길이를 알 수 없어서 크레딧을 어림할 수 없어요. 시작하지 않아요" };
     const seconds = Math.min(media.duration, clipSeconds() ?? Infinity);
     const credits = estimateCredits(seconds, STT_SPEED) + SUMMARY_CREDITS;
     const remaining = await gateway.credits();
@@ -227,7 +228,7 @@ async function sttPlan(id: string): Promise<SttPlan> {
  */
 async function sttRun(id: string): Promise<void> {
   const emit = (e: SttEvent): void => send("stt", e);
-  if (sttRunning.has(id)) return emit({ id, kind: "failed", text: "이 강의는 이미 만드는 중이에요" });
+  if (sttRunning.size) return emit({ id, kind: "failed", text: "다른 강의 자막을 만드는 중이에요. 끝난 뒤에 다시 눌러 주세요" });
   sttRunning.add(id);
   try {
     await sttRunOnce(id, emit);
@@ -256,7 +257,13 @@ async function sttRunOnce(id: string, emit: (e: SttEvent) => void): Promise<void
     } else {
       emit({ id, kind: "progress", text: "강의 음성을 뽑는 중이에요" });
       const audio = join(work, "lecture.mp3");
-      await extractAudio(ffmpegPath(), media.mediaUrl, audio, { clipSeconds: clipSeconds(), speed: STT_SPEED, normalize: true });
+      const audioSeconds = await extractAudio(ffmpegPath(), media.mediaUrl, audio, { clipSeconds: clipSeconds(), speed: STT_SPEED, normalize: true });
+      // Billing follows the uploaded audio, so the balance is checked again against what was actually extracted.
+      const cost = estimateCredits(audioSeconds) + SUMMARY_CREDITS;
+      const balance = await gateway.credits();
+      if (audioSeconds <= 0 || balance === null || balance < cost || cost > (plan.credits ?? 0) * 1.1 + 1) {
+        return emit({ id, kind: "failed", text: `예상과 다르게 약 ${cost.toFixed(1)}크레딧이 들어서 시작하지 않았어요` });
+      }
       emit({ id, kind: "progress", text: "받아쓰는 중이에요" });
       const result = await gateway.transcribe(audio, STT_MODEL);
       // Timestamps come back on the sped-up audio; scale them to the lecture's own clock.

@@ -61,8 +61,9 @@ export async function resolveMedia(ses: Session, data: ContentData): Promise<Lec
   if (!file || !template) throw new Error("강의 영상 파일을 찾지 못했어요");
   const mediaUrl = template.replace("[MEDIA_FILE]", encodeURIComponent(file));
   const captionUrls = [...xml.matchAll(/(https:\/\/[^\s"'<\]]+\.(?:vtt|srt|smi))/gi)].map((m) => m[1]!).filter(isMediaUrl);
-  const duration = Number(tagValues(story, "story_duration")[0] ?? data.duration ?? 0);
-  return { mediaUrl, duration: Number.isFinite(duration) ? duration : 0, captionUrls };
+  const storySeconds = Number(tagValues(story, "story_duration")[0]);
+  const duration = storySeconds > 0 ? storySeconds : Number(data.duration);
+  return { mediaUrl, duration: Number.isFinite(duration) && duration > 0 ? duration : 0, captionUrls };
 }
 
 /** Billing is per second of the uploaded audio (measured: 120.096 s cost 12.0096). */
