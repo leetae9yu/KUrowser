@@ -4,9 +4,9 @@ import { homedir } from "node:os";
 import { join, normalize, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { liveOptions } from "../engine/live.ts";
-import type { DownloadEvent, ReadCommand, Settings, Snapshot } from "../shared/types.ts";
-import { GatewayClient } from "./ai.ts";
+import { ATTENDANCE_TOOL_ID, CANVAS_ORIGIN, liveOptions } from "../engine/live.ts";
+import type { ChatReply, DownloadEvent, ReadCommand, Settings, Snapshot } from "../shared/types.ts";
+import { GatewayClient, type Opener } from "./ai.ts";
 import { devConfig } from "./dev.ts";
 import { ElectronBrowserSession } from "./electron-cdp.ts";
 import { isAiLoginUrl, isAllowedPage, isDownloadHost } from "./hosts.ts";
@@ -14,16 +14,21 @@ import { LmsService } from "./lms.ts";
 import { ReminderScheduler } from "./reminders.ts";
 import { keepLogin, makeEngineWindow, openSchoolWindow, schoolSession, signIn, signOut } from "./school.ts";
 import { COMMAND_PROMPT, SUMMARY_PROMPT, commandUserPrompt, parseCommand, parseSummaries, summaryUserPrompt } from "./sentence.ts";
+import { CHAT_PROMPT, chatUserPrompt, CLARIFY_PROMPT, commandOf, jevRequest, pageUrl, parseJev, routeUserPrompt } from "./route.ts";
 import { StateStore } from "./state.ts";
 
 const APP_ORIGIN = "app://kurowser";
 const DIST_DIR = join(app.getAppPath(), "dist");
 const RENDERER_DIR = join(DIST_DIR, "renderer");
 const STALE_MS = 10 * 60 * 1000;
+/** Below this Jev confidence the app asks back in one sentence instead of acting. */
+const ROUTE_CONFIDENCE = 0.6;
 /** Longer than a normal keychain read; past this the OS is most likely showing an allow prompt. */
 const KEYCHAIN_HINT_MS = 2500;
 
 let mainWindow: BrowserWindow | null = null;
+let gatewayRestored = false;
+let aiAttempted = false;
 
 protocol.registerSchemesAsPrivileged([{ scheme: "app", privileges: { standard: true, secure: true, supportFetchAPI: true } }]);
 
@@ -89,12 +94,103 @@ function openFromSnapshot(kind: "assignment" | "lecture" | "notice", id: unknown
   if (url) openSchoolWindow(url);
 }
 
+/** Shows the AI site's login in a school window when the portal session has lapsed. */
+const aiOpener: Opener = (() => {
+  let win: BrowserWindow | null = null;
+  return {
+    open(url: string) {
+      win = openSchoolWindow(url, mainWindow ?? undefined);
+      return win?.webContents ?? null;
+    },
+    close() {
+      if (win && !win.isDestroyed()) win.close();
+      win = null;
+    },
+  };
+})();
+
+/**
+ * The first portal sign-in also connects the AI: the AI site uses the same portal login, so the key is issued in
+ * the background without a second login. It runs once per app run, and only when no stored key works.
+ */
+async function connectAi(): Promise<{ ok: boolean; text: string }> {
+  aiAttempted = true;
+  try {
+    const text = await gateway.connect(aiOpener, (status) => send("aiStatus", status));
+    return { ok: true, text };
+  } catch (error) {
+    return { ok: false, text: error instanceof Error ? error.message : "연결하지 못했어요" };
+  } finally {
+    send("settings", settings());
+  }
+}
+
+const when = (iso: string | null): string =>
+  iso ? new Date(iso).toLocaleString("ko-KR", { month: "long", day: "numeric", weekday: "short", hour: "2-digit", minute: "2-digit" }) : "기한 없음";
+
+/** The LMS facts the chat model may use: open work, unwatched lectures, recent notices, new files. */
+function chatContext(): string {
+  const snap = lms.snapshot();
+  const name = new Map(snap.courses.map((c) => [c.id, c.name]));
+  const now = Date.now();
+  const lines = [
+    ...snap.assignments.filter((a) => !a.submitted && Date.parse(a.due) > now).sort((a, b) => a.due.localeCompare(b.due)).slice(0, 10).map((a) => `마감: ${name.get(a.courseId) ?? ""} ${a.title} ${when(a.due)}`),
+    ...snap.lectures.filter((l) => l.available).slice(0, 10).map((l) => `안 본 강의: ${name.get(l.courseId) ?? ""} ${l.title}, 출석 인정 ${when(l.until)}까지`),
+    ...snap.notices.slice(0, 8).map((n) => `공지: ${name.get(n.courseId) ?? ""} '${n.title}' ${n.summary || n.body.replace(/\s+/g, " ").slice(0, 200)}`),
+    ...snap.files.filter((f) => f.isNew && !f.downloaded).slice(0, 8).map((f) => `새 자료: ${name.get(f.courseId) ?? ""} ${f.name}`),
+  ];
+  return [`오늘: ${when(new Date().toISOString())}`, `과목: ${snap.courses.map((c) => c.name).join(", ")}`, ...lines].join("\n");
+}
+
+/**
+ * A sentence the local rules could not place. Jev classifies it in one decisions call; a confident read runs a
+ * read command, a page request opens the school page, a write request is refused with the page to do it on, and
+ * conversation goes to the cheap chat model. Each Gateway call carries a flat filter fee, so a sentence costs one
+ * or two calls at most.
+ */
+async function chat(text: string): Promise<ChatReply> {
+  if (!gateway.connected) return { kind: "error", text: "고대 AI가 아직 연결되지 않았어요" };
+  const snap = lms.snapshot();
+  const courses = snap.courses.map((c) => c.name);
+  const courseId = (n?: string) => snap.courses.find((c) => c.name === n)?.id;
+  try {
+    const route = parseJev(await gateway.decide(jevRequest(text, courses)), courses);
+    if (!route) return { kind: "error", text: "AI 답을 읽지 못했어요" };
+    if (route.kind !== "chat" && route.confidence < ROUTE_CONFIDENCE) {
+      return { kind: "clarify", text: await gateway.complete(CLARIFY_PROMPT, routeUserPrompt(text, courses), 80) };
+    }
+    const open = (): boolean => !!openSchoolWindow(pageUrl(CANVAS_ORIGIN, route.topic, courseId(route.course), ATTENDANCE_TOOL_ID));
+    switch (route.kind) {
+      case "write":
+        open();
+        return { kind: "refused", text: "제출, 출석, 글쓰기처럼 학교에 무언가를 바꾸는 일은 앱이 하지 않아요. 열어 둔 학교 화면에서 직접 해 주세요." };
+      case "command": {
+        const command = commandOf(route);
+        if (command) return { kind: "command", command };
+        return open() ? { kind: "opened", text: "학교 화면을 열었어요" } : { kind: "error", text: "그 화면을 열지 못했어요" };
+      }
+      case "path":
+        return open() ? { kind: "opened", text: `${route.course ? `${route.course} ` : ""}학교 화면을 열었어요` } : { kind: "error", text: "그 화면을 열지 못했어요" };
+      case "chat":
+        return { kind: "answer", text: await gateway.complete(CHAT_PROMPT, chatUserPrompt(text, chatContext()), 300) };
+    }
+  } catch (error) {
+    return { kind: "error", text: error instanceof Error ? error.message : "AI에 묻지 못했어요" };
+  }
+}
+
 function registerIpc(): void {
+  handle("chat", (text: unknown): Promise<ChatReply> | ChatReply =>
+    typeof text === "string" && text.trim() ? chat(text.trim().slice(0, 300)) : { kind: "error", text: "" },
+  );
   handle("snapshot", (): Snapshot => lms.snapshot());
   handle("refresh", () => lms.refresh());
   handle("login", async () => {
     const ok = await signIn(mainWindow ?? undefined);
-    if (ok) void lms.refresh();
+    if (ok) {
+      void lms.refresh();
+      if (!gateway.connected) void connectAi();
+    }
     return { ok, text: ok ? "로그인했어요" : "로그인 창이 닫혔어요" };
   });
   handle("logout", async () => {
@@ -162,14 +258,7 @@ function registerIpc(): void {
     store.update((s) => (s.notifyDue = on === true));
     return settings();
   });
-  handle("connectAi", async () => {
-    try {
-      const text = await gateway.connect(mainWindow, (status) => send("aiStatus", status));
-      return { ok: true, text };
-    } catch (error) {
-      return { ok: false, text: error instanceof Error ? error.message : "연결하지 못했어요" };
-    }
-  });
+  handle("connectAi", () => connectAi());
   handle("interpret", async (text: unknown): Promise<{ via: "ai"; command: ReadCommand } | null> => {
     if (typeof text !== "string" || !text.trim() || !gateway.connected) return null;
     const courses = lms.snapshot().courses.map((c) => c.name);
@@ -219,8 +308,17 @@ app.whenReady().then(async () => {
     app.exit(0);
     return;
   }
+  if (process.env.KUROWSER_BENCH && !app.isPackaged) {
+    const { runBench } = await import("./bench.ts");
+    await runBench(gateway, join(app.getAppPath(), "tests", "bench", "sentences.json"), process.env.KUROWSER_BENCH_OUT ?? join(app.getPath("temp"), "kurowser-bench.json"));
+    app.exit(0);
+    return;
+  }
   registerIpc();
-  lms.subscribe((snapshot) => send("snapshot", snapshot));
+  lms.subscribe((snapshot) => {
+    send("snapshot", snapshot);
+    if (snapshot.phase === "ready" && !aiAttempted && !gateway.connected && gatewayRestored) void connectAi();
+  });
   reminders.start();
   // The window comes first. Reading the stored AI key or the cookie key can wait on a macOS keychain
   // prompt (an unsigned or re-signed build asks again), and that wait must not keep the app windowless.
@@ -238,7 +336,10 @@ async function startLoading(): Promise<void> {
   const hint = setTimeout(() => lms.waitingForKeychain(), KEYCHAIN_HINT_MS);
   await safeStorage.isAsyncEncryptionAvailable().catch(() => false);
   clearTimeout(hint);
-  void gateway.restore();
+  void gateway.restore().finally(() => {
+    gatewayRestored = true;
+    if (lms.snapshot().phase === "ready" && !aiAttempted && !gateway.connected) void connectAi();
+  });
   void lms.refresh();
 }
 
