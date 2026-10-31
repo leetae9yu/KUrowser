@@ -361,6 +361,8 @@ function registerIpc(): void {
     const ok = await signIn(pane);
     if (ok) {
       void lms.refresh();
+      // The sites read at start ran before this login; the library sign-in needs the portal session it brings.
+      void sites.refresh();
       if (!gateway.connected) void connectAi();
     }
     return { ok, text: ok ? "로그인했어요" : "로그인 창이 닫혔어요" };
