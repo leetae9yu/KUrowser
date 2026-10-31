@@ -149,6 +149,45 @@ export interface Loan {
   renewals: number;
 }
 
+/** One weekly class meeting from the academic-system timetable; times are `HH:MM`. */
+export interface AmsClass {
+  day: string;
+  slot: string;
+  title: string;
+  room: string;
+  begins: string;
+  ends: string;
+}
+
+export interface AmsGrade {
+  term: string;
+  title: string;
+  category: string;
+  credits: string;
+  grade: string;
+}
+
+export interface AmsSummary {
+  term: string;
+  classes: AmsClass[];
+  enrolledCredits: number;
+  grades: AmsGrade[];
+  gpa: string;
+  earned: string;
+}
+
+/**
+ * The academic system read. `code` waits for the six-digit code the school mailed (`mask` is the masked address the
+ * school shows); the data lives in memory only.
+ */
+export interface AmsState {
+  phase: "idle" | "sending" | "code" | "verifying" | "loading" | "ready" | "error";
+  mask?: string;
+  message?: string;
+  data: AmsSummary | null;
+  at: string | null;
+}
+
 export interface SiteState<T> {
   data: T;
   fetchedAt: string | null;
@@ -250,4 +289,11 @@ export interface KurowserApi {
   openPortalNotice(id: string): Promise<void>;
   /** Reading-room seats, read again when older than a minute. */
   seats(): Promise<{ rooms: SeatRoom[]; at: string | null; error: string | null }>;
+  ams(): Promise<AmsState>;
+  onAms(fn: (s: AmsState) => void): () => void;
+  /** Reads grades, timetable and credits; signs in with a mailed code first when the academic system needs it. */
+  amsStart(): Promise<void>;
+  /** False when no sign-in is waiting for a code or the code is not six digits. */
+  amsCode(code: string): Promise<boolean>;
+  amsCancel(): Promise<void>;
 }

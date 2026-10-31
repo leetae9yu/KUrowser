@@ -42,6 +42,10 @@ export function isDownloadHost(hostname: string): boolean {
 const MUTATING = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
 const DOCUMENT_TYPES = new Set(["mainFrame", "subFrame"]);
+/** The SSO page's own mail-code steps for the academic system: user check, switch to mail, send, verify. */
+const SSO_MAIL_CODE = new Set(["/korea/auth/IOPUserStatusChk.eps", "/korea/EmailMasking.eps", "/korea/auth/IOPOtpReq.eps", "/korea/auth/IOPOtpVerify.eps"]);
+/** The academic system's sign-in relay pages, posted as page navigations after the SSO step. */
+const AMS_RELAY = /^\/exsignon\/sso\/sso_(identify|idp_login)\.jsp$/;
 const LTI_LAUNCH = /^\/learningx\/lti\/[a-z_]+\/course_menu$/;
 const CANVAS_LOGIN = /^\/login(\/|$)/;
 
@@ -56,7 +60,9 @@ export function engineRequestAllowed(method: string, url: string, resourceType: 
   const u = parse(url);
   // The AI site signs in inside the same hidden window; its own login hand-off posts are not school writes.
   if (u && AI_SITE_HOSTS.has(u.hostname) && isAiLoginUrl(url)) return true;
+  if (u?.protocol === "https:" && u.hostname === "sso.korea.ac.kr" && SSO_MAIL_CODE.has(u.pathname)) return true;
   if (!DOCUMENT_TYPES.has(resourceType)) return false;
+  if (u?.protocol === "https:" && u.hostname === "ams.korea.ac.kr") return AMS_RELAY.test(u.pathname);
   if (!u || u.protocol !== "https:" || !isSchoolHost(u.hostname)) return false;
   if (u.hostname === "sso.korea.ac.kr") return true;
   if (u.hostname !== "mylms.korea.ac.kr" && u.hostname !== "canvas.korea.ac.kr") return false;

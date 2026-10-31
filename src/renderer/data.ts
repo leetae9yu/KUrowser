@@ -98,7 +98,8 @@ export function suggestionsFor(data: Data): string[] {
     "다음 학사 일정 뭐야",
     "중앙도서관 빈자리 있어?",
     "빌린 책 반납일 알려줘",
-    "성적 화면 열어줘",
+    "이번 학기 성적 알려줘",
+    "내 시간표 보여줘",
     data.courses[1] ? `${shortCourseName(data.courses[1].name)} 열어줘` : "과목 전체 보기",
     "과목 전체 보기",
   ].filter((s, i, all) => all.indexOf(s) === i);

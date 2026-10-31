@@ -36,7 +36,8 @@ export type Parsed =
   | { kind: "menu"; menu: SchoolMenu }
   | { kind: "menus" }
   | { kind: "loans" }
-  | { kind: "seats"; library?: string };
+  | { kind: "seats"; library?: string }
+  | { kind: "ams"; topic: "grades" | "timetable" | "credits" };
 
 /** Words for each library in the seat service, matched without spaces. */
 const LIBRARY_WORDS: readonly (readonly [string, string[]])[] = [
@@ -75,6 +76,11 @@ function parseSites(s: string, sites: SitesSnapshot | undefined, course: string 
   const menu = sites?.menus.find((m) => m.words.some((w) => s.includes(w)));
   if (menu && has(s, ...OPEN_WORDS)) return { kind: "menu", menu };
   if (has(s, "학교메뉴", "학교바로가기", "학교사이트")) return { kind: "menus" };
+  if (!has(s, ...LMS_WORDS)) {
+    if (has(s, "이수학점", "취득학점", "몇학점", "학점요약", "졸업학점", "신청학점")) return { kind: "ams", topic: "credits" };
+    if (has(s, "성적", "평점", "gpa", "학점")) return { kind: "ams", topic: "grades" };
+    if (has(s, "시간표", "오늘수업", "내일수업", "수업시간", "강의실어디")) return { kind: "ams", topic: "timetable" };
+  }
   const library = LIBRARY_WORDS.find(([, words]) => has(s, ...words))?.[0];
   if (has(s, "열람실", "좌석") || (has(s, "자리", "빈자리") && (library || has(s, "도서관")))) return { kind: "seats", library };
   if (has(s, "빌린책", "대출", "반납", "연체", "도서관책", "빌려온") && (!has(s, ...LMS_WORDS) || has(s, "도서관", "책"))) return { kind: "loans" };

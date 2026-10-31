@@ -2,6 +2,7 @@ import { Check } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ChatReply, ReadCommand } from "../../shared/types";
 import { loansOutcome, outcomeFor, parseRules, portalOutcome, recordingsOutcome, scheduleOutcome, seatsOutcome, type Outcome, type Parsed } from "../commands";
+import { AmsCard, type AmsTopic } from "../components/AmsCard";
 import { CommandInput } from "../components/CommandInput";
 import { ResultCard } from "../components/ResultCard";
 import { suggestionsFor } from "../data";
@@ -13,10 +14,12 @@ type Tone = "plain" | "quiet" | "done";
 type Message =
   | { id: number; from: "user"; text: string }
   | { id: number; from: "app"; kind: "text"; text: string; tone: Tone }
-  | { id: number; from: "app"; kind: "result"; outcome: Outcome };
+  | { id: number; from: "app"; kind: "result"; outcome: Outcome }
+  | { id: number; from: "app"; kind: "ams"; topic: AmsTopic };
 type Draft = Message extends infer M ? (M extends Message ? Omit<M, "id"> : never) : never;
 
 const AI_FAILED = "AI에 묻지 못했어요";
+const AMS_FRESH_MS = 30 * 60_000;
 
 function fromReply(reply: ChatReply, outcome: (command: ReadCommand) => Outcome): Draft {
   switch (reply.kind) {
@@ -37,6 +40,15 @@ function Bubble({ message, onRun }: { message: Message; onRun: (text: string) =>
     return (
       <li className="msg msg-user">
         <p className="bubble bubble-user">{message.text}</p>
+      </li>
+    );
+  }
+  if (message.kind === "ams") {
+    return (
+      <li className="msg msg-app msg-card">
+        <div className="card">
+          <AmsCard topic={message.topic} />
+        </div>
       </li>
     );
   }
@@ -127,7 +139,7 @@ export function Chat({ active }: { active: boolean }) {
   // A request that needs data still loading waits for it instead of answering "none" from an empty list.
   const waiting = (rules: Parsed): boolean => {
     const snap = latest.current.snapshot;
-    if (rules.kind === "theme" || rules.kind === "navigate" || rules.kind === "menu" || rules.kind === "menus" || rules.kind === "seats") return false;
+    if (rules.kind === "theme" || rules.kind === "navigate" || rules.kind === "menu" || rules.kind === "menus" || rules.kind === "seats" || rules.kind === "ams") return false;
     if (rules.kind === "loans") {
       const library = latest.current.sites.library;
       return !library.fetchedAt && !library.error && library.data.signedIn;
@@ -187,6 +199,14 @@ export function Chat({ active }: { active: boolean }) {
     }
     if (rules.kind === "schedule") {
       push({ from: "app", kind: "result", outcome: scheduleOutcome(s.sites, rules.word) });
+      return;
+    }
+    if (rules.kind === "ams") {
+      push({ from: "app", kind: "ams", topic: rules.topic });
+      // Data older than half an hour, or none yet, is read again (signing in with a mailed code if needed).
+      const fresh = s.ams.phase === "ready" && !!s.ams.at && Date.now() - Date.parse(s.ams.at) < AMS_FRESH_MS;
+      const busyAms = ["sending", "code", "verifying", "loading"].includes(s.ams.phase);
+      if (!fresh && !busyAms) void api().amsStart();
       return;
     }
     if (rules.kind === "loans") {

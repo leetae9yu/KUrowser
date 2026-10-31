@@ -444,3 +444,13 @@
     height: 56px;
   }
 }
+
+.ams-code .command-input {
+  height: 52px;
+  margin-top: var(--space-3);
+  padding: 0 var(--space-4);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  letter-spacing: 0.3em;
+}

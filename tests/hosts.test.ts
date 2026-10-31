@@ -42,4 +42,13 @@ describe("hidden engine window", () => {
     expect(engineRequestAllowed("POST", "https://mylms.korea.ac.kr/login/canvas", doc)).toBe(true);
     expect(engineRequestAllowed("POST", "https://mylms.korea.ac.kr/loginx", doc)).toBe(false);
   });
+
+  test("the academic-system sign-in may send its mail-code steps and relay, nothing else there", () => {
+    expect(engineRequestAllowed("POST", "https://sso.korea.ac.kr/korea/auth/IOPOtpReq.eps", "xhr")).toBe(true);
+    expect(engineRequestAllowed("POST", "https://sso.korea.ac.kr/korea/auth/IOPOtpVerify.eps", "fetch")).toBe(true);
+    expect(engineRequestAllowed("POST", "https://sso.korea.ac.kr/korea/EmailSend.eps", "xhr")).toBe(false);
+    expect(engineRequestAllowed("POST", "https://ams.korea.ac.kr/exsignon/sso/sso_identify.jsp", doc)).toBe(true);
+    expect(engineRequestAllowed("POST", "https://ams.korea.ac.kr/exsignon/sso/logout.jsp", doc)).toBe(false);
+    expect(engineRequestAllowed("POST", "https://ams.korea.ac.kr/sch/sles/SlesstCtr/findStdAppcsDtlsList.do", "xhr")).toBe(false);
+  });
 });

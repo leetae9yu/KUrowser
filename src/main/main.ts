@@ -16,7 +16,8 @@ import { isAiLoginUrl, isAllowedPage, isDownloadHost } from "./hosts.ts";
 import { type LmsCache, LmsService } from "./lms.ts";
 import { ReminderScheduler } from "./reminders.ts";
 import { SchoolPane } from "./pane.ts";
-import { siteGet } from "./site-fetch.ts";
+import { AmsService } from "./ams.ts";
+import { amsPost, siteGet } from "./site-fetch.ts";
 import { type SitesCache, SitesService } from "./sites.ts";
 import { keepLogin, makeEngineWindow, schoolSession, signIn, signOut } from "./school.ts";
 import { COMMAND_PROMPT, SUMMARY_LECTURE_PROMPT, SUMMARY_PROMPT, commandUserPrompt, parseCommand, parseSummaries, summaryUserPrompt } from "./sentence.ts";
@@ -68,6 +69,7 @@ const sites = new SitesService({
   cache: sitesCache,
   readNotices: () => new Set(store.get().readNotices),
 });
+const ams = new AmsService({ get: siteGet, post: amsPost, hidden, onChange: (state) => send("ams", state) });
 const lms = new LmsService({
   engine,
   cache: lmsCache,
@@ -340,6 +342,12 @@ function registerIpc(): void {
   handle("sites", () => sites.snapshot());
   handle("refreshSites", () => sites.refresh());
   handle("seats", () => sites.seats());
+  handle("ams", () => ams.snapshot());
+  handle("amsStart", () => {
+    void ams.start();
+  });
+  handle("amsCode", (code: unknown) => typeof code === "string" && ams.enterCode(code));
+  handle("amsCancel", () => ams.cancel());
   handle("openMenu", (id: unknown) => {
     const menu = sites.snapshot().menus.find((m) => m.id === id);
     return !!menu && !!pane.open(menu.url);
@@ -363,6 +371,7 @@ function registerIpc(): void {
     void engine.close();
     lms.loggedOut();
     sites.clear();
+    ams.clear();
   });
   handle("openAssignment", (id: unknown) => openFromSnapshot("assignment", id));
   handle("openLecture", (id: unknown) => openFromSnapshot("lecture", id));

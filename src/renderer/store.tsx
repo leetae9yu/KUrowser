@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import type { DownloadEvent, KurowserApi, PaneState, Settings, SitesSnapshot, Snapshot } from "../shared/types";
+import type { AmsState, DownloadEvent, KurowserApi, PaneState, Settings, SitesSnapshot, Snapshot } from "../shared/types";
 import { toData, type Assignment, type Data, type FileItem, type Lecture, type Theme } from "./data";
 
 declare global {
@@ -23,6 +23,8 @@ interface Store {
   snapshot: Snapshot;
   /** Portal and the other school sites; each part fills in on its own. */
   sites: SitesSnapshot;
+  /** The academic system read, kept in the main process's memory only. */
+  ams: AmsState;
   data: Data;
   settings: Settings | null;
   /** The school page the main process shows left of the chat; the renderer only draws its bar. */
@@ -70,6 +72,7 @@ function readTheme(): Theme {
 export function StoreProvider({ children }: { children: ReactNode }) {
   const [snapshot, setSnapshot] = useState<Snapshot>(EMPTY);
   const [sites, setSites] = useState<SitesSnapshot>(NO_SITES);
+  const [ams, setAms] = useState<AmsState>({ phase: "idle", data: null, at: null });
   const [settings, setSettings] = useState<Settings | null>(null);
   const [pane, setPane] = useState<PaneState>(PANE_CLOSED);
   const [watched, setWatched] = useState(() => new Set<string>());
@@ -86,6 +89,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     void api().snapshot().then(setSnapshot);
     void api().sites().then(setSites);
     const offSites = api().onSites(setSites);
+    void api().ams().then(setAms);
+    const offAms = api().onAms(setAms);
     void api().settings().then(setSettings);
     void api().paneState().then(setPane);
     const offSnapshot = api().onSnapshot(setSnapshot);
@@ -104,6 +109,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     });
     return () => {
       offSites();
+      offAms();
       offSnapshot();
       offSettings();
       offPane();
@@ -226,6 +232,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const value: Store = {
     snapshot,
     sites,
+    ams,
     data,
     settings,
     pane,
