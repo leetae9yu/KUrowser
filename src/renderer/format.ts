@@ -78,8 +78,10 @@ export function weekStart(offsetWeeks = 0): Date {
   return addDays(today0, -mondayIndex + offsetWeeks * 7);
 }
 
-export function sizeLabel(mb: number): string {
-  return mb < 1 ? `${Math.round(mb * 1024)}KB` : `${mb.toFixed(1)}MB`;
+export function sizeLabel(bytes: number): string {
+  if (!bytes) return "";
+  const mb = bytes / 1_048_576;
+  return mb < 1 ? `${Math.max(1, Math.round(bytes / 1024))}KB` : `${mb.toFixed(1)}MB`;
 }
 
 /** Plain-language time: "오늘 자정 전", "내일 저녁 6시", "11월 3일 화요일 자정 전". */

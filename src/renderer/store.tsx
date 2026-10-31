@@ -1,5 +1,14 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { lectures, notices, type Assignment, type FileItem, type Lecture } from "./data";
+import type { DownloadEvent, KurowserApi, Settings, Snapshot } from "../shared/types";
+import { toData, type Assignment, type Data, type FileItem, type Lecture } from "./data";
+
+declare global {
+  interface Window {
+    kurowser: KurowserApi;
+  }
+}
+
+export const api = (): KurowserApi => window.kurowser;
 
 export type Theme = "system" | "light" | "dark";
 
@@ -7,10 +16,13 @@ export interface Job {
   id: string;
   file: FileItem;
   progress: number;
-  state: "queued" | "active" | "done" | "canceled";
+  state: "queued" | "active" | "done" | "failed" | "canceled";
 }
 
 interface Store {
+  snapshot: Snapshot;
+  data: Data;
+  settings: Settings | null;
   watched: Set<string>;
   read: Set<string>;
   opened: Set<string>;
@@ -23,19 +35,20 @@ interface Store {
   setTheme: (t: Theme) => void;
   watch: (l: Lecture) => void;
   markRead: (ids: string[]) => void;
-  remind: (ids: string[]) => void;
+  summarize: (ids: string[]) => Promise<void>;
+  remind: (ids: string[]) => Promise<void>;
   openAssignment: (a: Assignment) => void;
   download: (files: FileItem[]) => number;
   cancelDownloads: () => void;
   clearDownloads: () => void;
   showToast: (text: string, note?: string) => void;
+  login: () => Promise<void>;
+  setSettings: (s: Settings) => void;
 }
 
 const StoreContext = createContext<Store | null>(null);
 
-const MAX_PARALLEL = 3;
-export const DEMO_NOTE = "시안이라 학교 화면으로 이동하지 않아요";
-const TICK_MS = 120;
+const EMPTY: Snapshot = { phase: "loading", error: null, courses: [], assignments: [], lectures: [], notices: [], files: [], pending: [], reminders: [], fetchedAt: null };
 
 function readTheme(): Theme {
   const saved = localStorage.getItem("theme");
@@ -43,15 +56,35 @@ function readTheme(): Theme {
 }
 
 export function StoreProvider({ children }: { children: ReactNode }) {
-  const [watched, setWatched] = useState(() => new Set(lectures.filter((l) => l.watchedAtStart).map((l) => l.id)));
-  const [read, setRead] = useState(() => new Set(notices.filter((n) => n.readAtStart).map((n) => n.id)));
+  const [snapshot, setSnapshot] = useState<Snapshot>(EMPTY);
+  const [settings, setSettings] = useState<Settings | null>(null);
+  const [watched, setWatched] = useState(() => new Set<string>());
+  const [localRead, setLocalRead] = useState(() => new Set<string>());
   const [opened, setOpened] = useState(() => new Set<string>());
-  const [reminders, setReminders] = useState(() => new Set<string>());
   const [jobs, setJobs] = useState<Job[]>([]);
   const [trayHidden, setTrayHidden] = useState(false);
   const [theme, setThemeState] = useState<Theme>(readTheme);
   const [toast, setToast] = useState<Store["toast"]>(null);
   const toastSeq = useRef(0);
+
+  useEffect(() => {
+    void api().snapshot().then(setSnapshot);
+    void api().settings().then(setSettings);
+    const offSnapshot = api().onSnapshot(setSnapshot);
+    const offDownload = api().onDownload((e: DownloadEvent) => {
+      if (e.kind === "progress") {
+        setJobs((prev) =>
+          prev.map((j) => (j.id === e.fileId && j.state !== "canceled" ? { ...j, state: e.state, progress: e.state === "active" ? 0.5 : 1 } : j)),
+        );
+      } else {
+        setJobs((prev) => prev.map((j) => (j.state === "queued" || j.state === "active" ? { ...j, state: e.canceled ? "canceled" : "failed" } : j)));
+      }
+    });
+    return () => {
+      offSnapshot();
+      offDownload();
+    };
+  }, []);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -66,30 +99,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return () => window.clearTimeout(t);
   }, [toast]);
 
-  const busy = jobs.some((j) => j.state === "queued" || j.state === "active");
-  useEffect(() => {
-    if (!busy) return;
-    const timer = window.setInterval(() => {
-      setJobs((prev) => {
-        let active = prev.filter((j) => j.state === "active").length;
-        return prev.map((j) => {
-          if (j.state === "active") {
-            const step = Math.min(0.2, Math.max(0.04, 0.5 / j.file.sizeMB));
-            const progress = Math.min(1, j.progress + step);
-            return progress >= 1 ? { ...j, progress: 1, state: "done" } : { ...j, progress };
-          }
-          if (j.state === "queued" && active < MAX_PARALLEL) {
-            active += 1;
-            return { ...j, state: "active" };
-          }
-          return j;
-        });
-      });
-    }, TICK_MS);
-    return () => window.clearInterval(timer);
-  }, [busy]);
-
-  const downloaded = useMemo(() => new Set(jobs.filter((j) => j.state === "done").map((j) => j.file.id)), [jobs]);
+  const data = useMemo(() => toData(snapshot), [snapshot]);
+  const read = useMemo(() => new Set([...data.notices.filter((n) => n.read).map((n) => n.id), ...localRead]), [data, localRead]);
+  const reminders = useMemo(() => new Set(snapshot.reminders), [snapshot.reminders]);
+  const downloaded = useMemo(
+    () => new Set([...data.files.filter((f) => f.downloaded).map((f) => f.id), ...jobs.filter((j) => j.state === "done").map((j) => j.id)]),
+    [data, jobs],
+  );
 
   const showToast = useCallback((text: string, note?: string) => {
     toastSeq.current += 1;
@@ -99,56 +115,71 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const watch = useCallback(
     (l: Lecture) => {
       setWatched((prev) => new Set(prev).add(l.id));
-      showToast(`${l.week}주차 「${l.title}」 강의를 새 탭에서 열었어요`, DEMO_NOTE);
+      void api().openLecture(l.id);
+      showToast(`「${l.title}」 강의 화면을 열었어요`, "출석은 학교 화면에서 끝까지 봐야 인정돼요");
     },
     [showToast],
   );
 
   const markRead = useCallback((ids: string[]) => {
-    setRead((prev) => {
-      const next = new Set(prev);
-      ids.forEach((id) => next.add(id));
-      return next;
-    });
+    setLocalRead((prev) => new Set([...prev, ...ids]));
+    void api().markRead(ids);
   }, []);
 
-  const remind = useCallback((ids: string[]) => {
-    setReminders((prev) => {
-      const next = new Set(prev);
-      ids.forEach((id) => next.add(id));
-      return next;
-    });
-  }, []);
-
-  const openAssignment = useCallback(
-    (a: Assignment) => {
-      setOpened((prev) => new Set(prev).add(a.id));
-      showToast(`「${a.title}」 과제 페이지를 새 탭에서 열었어요`, DEMO_NOTE);
+  const summarize = useCallback(
+    async (ids: string[]) => {
+      const result = await api().summarize(ids);
+      if (!result.ok && result.text) showToast(result.text);
     },
     [showToast],
   );
 
-  const download = useCallback((list: FileItem[]) => {
-    let added = 0;
-    if (list.length) setTrayHidden(false);
-    setJobs((prev) => {
-      const taken = new Set(prev.filter((j) => j.state !== "canceled").map((j) => j.file.id));
-      const fresh = list.filter((f) => !taken.has(f.id));
-      added = fresh.length;
-      const kept = prev.filter((j) => j.state !== "canceled");
-      return [...kept, ...fresh.map((f) => ({ id: f.id, file: f, progress: 0, state: "queued" as const }))];
-    });
-    return added;
-  }, []);
+  const remind = useCallback(
+    async (ids: string[]) => {
+      const result = await api().remind(ids);
+      showToast(result.text);
+    },
+    [showToast],
+  );
+
+  const openAssignment = useCallback(
+    (a: Assignment) => {
+      setOpened((prev) => new Set(prev).add(a.id));
+      void api().openAssignment(a.id);
+      showToast(`「${a.title}」 과제 화면을 열었어요`, "내는 건 학교 화면에서 해요");
+    },
+    [showToast],
+  );
+
+  const download = useCallback(
+    (list: FileItem[]) => {
+      const taken = new Set(jobs.filter((j) => j.state === "queued" || j.state === "active" || j.state === "done").map((j) => j.id));
+      const fresh = list.filter((f) => f.available && !taken.has(f.id));
+      if (!fresh.length) return 0;
+      setTrayHidden(false);
+      setJobs((prev) => [...prev.filter((j) => !fresh.some((f) => f.id === j.id)), ...fresh.map((f) => ({ id: f.id, file: f, progress: 0, state: "queued" as const }))]);
+      void api().download(fresh.map((f) => f.id));
+      return fresh.length;
+    },
+    [jobs],
+  );
 
   const cancelDownloads = useCallback(() => {
-    setJobs((prev) => prev.map((j) => (j.state === "queued" || j.state === "active" ? { ...j, state: "canceled" } : j)));
+    void api().cancelDownloads();
+    setJobs((prev) => prev.map((j) => (j.state === "queued" ? { ...j, state: "canceled" } : j)));
   }, []);
 
-  // Hiding the tray keeps the job history: finished files stay "downloaded".
   const clearDownloads = useCallback(() => setTrayHidden(true), []);
 
+  const login = useCallback(async () => {
+    const result = await api().login();
+    if (!result.ok) showToast(result.text);
+  }, [showToast]);
+
   const value: Store = {
+    snapshot,
+    data,
+    settings,
     watched,
     read,
     opened,
@@ -161,12 +192,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setTheme: setThemeState,
     watch,
     markRead,
+    summarize,
     remind,
     openAssignment,
     download,
     cancelDownloads,
     clearDownloads,
     showToast,
+    login,
+    setSettings,
   };
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>;
 }
@@ -178,5 +212,10 @@ export function useStore(): Store {
 }
 
 export function jobFor(jobs: Job[], fileId: string): Job | undefined {
-  return jobs.find((j) => j.file.id === fileId && j.state !== "canceled");
+  return jobs.find((j) => j.id === fileId && j.state !== "canceled");
+}
+
+export function settled(jobs: Job[], fileId: string): boolean {
+  const job = jobFor(jobs, fileId);
+  return !job || job.state === "done" || job.state === "failed";
 }

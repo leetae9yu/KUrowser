@@ -1,10 +1,10 @@
-import { ArrowDown, ArrowLeft, ArrowUp, Check, LoaderCircle, Search, Sparkles } from "lucide-react";
+import { ArrowDown, ArrowLeft, ArrowUp, Check, LoaderCircle, LogIn, RefreshCw, Search, Sparkles } from "lucide-react";
 import { useEffect, useRef, useState, type TouchEvent } from "react";
 import type { Outcome } from "../commands";
 import { CommandInput, useRunner } from "../components/CommandInput";
 import { ResultCard, Summary } from "../components/ResultCard";
-import { courseById, suggestions } from "../data";
-import { jobFor, useStore } from "../store";
+import { courseOf, suggestionsFor } from "../data";
+import { api, jobFor, settled, useStore } from "../store";
 import { useTasks, type Task } from "../tasks";
 
 type Mode = "tasks" | "ask" | "result" | "batch";
@@ -12,8 +12,9 @@ type Mode = "tasks" | "ask" | "result" | "batch";
 const DONE_MS = 1100;
 
 function CourseChip({ task }: { task: Task }) {
+  const { data } = useStore();
   if (!task.courseId) return null;
-  const c = courseById[task.courseId];
+  const c = courseOf(data, task.courseId);
   return (
     <span className="course-chip">
       <span className={`dot hue-${c.hue}`} aria-hidden="true" />
@@ -37,7 +38,10 @@ function DoneScreen({ line }: { line: string }) {
 
 export function Home() {
   const store = useStore();
-  const { jobs, downloaded } = store;
+  const { jobs, snapshot } = store;
+  const suggestions = suggestionsFor(store.data);
+  const [ranDone, setRanDone] = useState(() => new Set<string>());
+  const [thinking, setThinking] = useState(false);
   const tasks = useTasks();
   const runner = useRunner();
   const [mode, setMode] = useState<Mode>("tasks");
@@ -52,7 +56,8 @@ export function Home() {
   const [announce, setAnnounce] = useState("");
   const touchY = useRef<number | null>(null);
 
-  const wasCanceled = (fileId: string) => !jobFor(jobs, fileId) && jobs.some((j) => j.file.id === fileId && j.state === "canceled");
+  const wasCanceled = (fileId: string) => !jobFor(jobs, fileId) && jobs.some((j) => j.id === fileId && j.state === "canceled");
+  const filesSettled = (t: Task) => (t.files ?? []).every((f) => store.downloaded.has(f.id) || wasCanceled(f.id) || (jobFor(jobs, f.id) && settled(jobs, f.id)));
   const auto = tasks.filter((t) => t.auto);
   const showIntro = mode === "tasks" && !introDismissed && batch === null && auto.length >= 2;
   const index = Math.max(0, tasks.findIndex((t) => t.id === cursor));
@@ -72,7 +77,7 @@ export function Home() {
   };
 
   const act = (task: Task) => {
-    task.run();
+    void task.run();
     if (task.kind === "files") setWaiting(task);
     else finish(task);
   };
@@ -83,7 +88,7 @@ export function Home() {
     if (waiting.files.some((f) => wasCanceled(f.id))) {
       setWaiting(null);
       store.showToast("자료 받기를 취소했어요");
-    } else if (waiting.files.every((f) => downloaded.has(f.id))) {
+    } else if (filesSettled(waiting)) {
       setWaiting(null);
       finish(waiting);
     }
@@ -124,13 +129,13 @@ export function Home() {
     const t = batch.items[batch.step];
     if (!started.current.has(t.id)) {
       started.current.add(t.id);
-      t.run();
+      void Promise.resolve(t.run()).finally(() => setRanDone((prev) => new Set(prev).add(t.id)));
     }
-    const ready = t.kind !== "files" || (t.files ?? []).every((f) => downloaded.has(f.id) || wasCanceled(f.id));
+    const ready = t.kind === "files" ? filesSettled(t) : ranDone.has(t.id);
     if (!ready) return;
-    const h = window.setTimeout(() => setBatch((b) => b && { ...b, step: b.step + 1 }), t.kind === "files" ? 300 : 700);
+    const h = window.setTimeout(() => setBatch((b) => b && { ...b, step: b.step + 1 }), t.kind === "files" ? 300 : 500);
     return () => window.clearTimeout(h);
-  }, [batch, downloaded]);
+  }, [batch, jobs, ranDone, store.downloaded]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -156,8 +161,9 @@ export function Home() {
     return () => window.removeEventListener("keydown", onKey);
   });
 
-  const run = (text: string) => {
-    const result = runner(text);
+  const run = async (text: string) => {
+    setThinking(true);
+    const result = await runner(text).finally(() => setThinking(false));
     if (result.kind === "navigate") return;
     if (result.kind === "theme") {
       store.showToast(result.title);
@@ -192,12 +198,58 @@ export function Home() {
     </button>
   );
 
+  const pendingNote = snapshot.pending.length ? (
+    <p className="hero-sub">
+      <LoaderCircle size={14} className="spin" aria-hidden="true" /> 강의와 자료는 아직 확인하고 있어요
+    </p>
+  ) : null;
+
   let screen;
-  if (mode === "ask") {
+  if (snapshot.phase === "login") {
+    screen = (
+      <div className="stage-body">
+        <p className="eyebrow">처음 한 번만</p>
+        <h1 className="hero-title">
+          학교 계정으로
+          <br />
+          로그인해 주세요
+        </h1>
+        <p className="hero-sub">학교 로그인 창이 열려요. 비밀번호는 그 창에만 넣고, 앱은 받지 않아요.</p>
+        <div className="stage-actions">
+          <button type="button" className="btn btn-lg btn-primary" onClick={() => void store.login()}>
+            <LogIn size={18} aria-hidden="true" />
+            <span>로그인</span>
+          </button>
+        </div>
+      </div>
+    );
+  } else if (snapshot.phase === "loading" && !snapshot.courses.length) {
+    screen = (
+      <div className="stage-body">
+        <span className="done-mark done-mark-calm" aria-hidden="true">
+          <LoaderCircle size={40} className="spin" />
+        </span>
+        <h1 className="hero-title">오늘 할 일을 모으는 중이에요</h1>
+        <p className="hero-sub">과제, 공지, 강의, 자료를 학교에서 확인하고 있어요.</p>
+      </div>
+    );
+  } else if (snapshot.phase === "error" && !snapshot.courses.length) {
+    screen = (
+      <div className="stage-body">
+        <h1 className="hero-title">{snapshot.error ?? "학교 정보를 가져오지 못했어요"}</h1>
+        <div className="stage-actions">
+          <button type="button" className="btn btn-lg btn-primary" onClick={() => void api().refresh()}>
+            <RefreshCw size={18} aria-hidden="true" />
+            <span>다시 시도</span>
+          </button>
+        </div>
+      </div>
+    );
+  } else if (mode === "ask") {
     screen = (
       <div className="stage-body stage-top">
         {back}
-        <h1 className="hero-title">무엇을 할까요?</h1>
+        <h1 className="hero-title">{thinking ? "알아보는 중이에요" : "무엇을 할까요?"}</h1>
         <CommandInput
           id="ask-input"
           label="한 문장으로 말하기"
@@ -205,12 +257,12 @@ export function Home() {
           size="lg"
           shortcuts
           autoFocus
-          onRun={run}
+          onRun={(text) => void run(text)}
         />
         <ul className="say-list" aria-label="이렇게 말해 보세요">
           {suggestions.map((s) => (
             <li key={s}>
-              <button type="button" className="say" onClick={() => run(s)}>
+              <button type="button" className="say" disabled={thinking} onClick={() => void run(s)}>
                 {s}
               </button>
             </li>
@@ -222,12 +274,12 @@ export function Home() {
     screen = (
       <div className="stage-body stage-top">
         {back}
-        <ResultCard outcome={outcome} onRun={run} onBack={() => setMode("tasks")} />
+        <ResultCard outcome={outcome} onRun={(text) => void run(text)} onBack={() => setMode("tasks")} />
         {outcome.kind === "unknown" && (
           <ul className="say-list">
             {suggestions.map((s) => (
               <li key={s}>
-                <button type="button" className="say" onClick={() => run(s)}>
+                <button type="button" className="say" disabled={thinking} onClick={() => void run(s)}>
                   {s}
                 </button>
               </li>
@@ -310,6 +362,7 @@ export function Home() {
           <br />
           끝낼 수 있어요
         </h1>
+        {pendingNote}
         <ul className="intro-list">
           {auto.map((t) => (
             <li key={t.id}>
@@ -324,6 +377,7 @@ export function Home() {
             className="btn btn-lg btn-primary"
             onClick={() => {
               started.current.clear();
+              setRanDone(new Set());
               setBatch({ items: auto, step: 0 });
               setMode("batch");
             }}
@@ -344,8 +398,8 @@ export function Home() {
         <span className="done-mark done-mark-calm" aria-hidden="true">
           <Check size={40} strokeWidth={3} />
         </span>
-        <h1 className="hero-title">오늘 할 거 다 했어요</h1>
-        <p className="hero-sub">새로 생기면 여기에 바로 보여 드릴게요.</p>
+        <h1 className="hero-title">{snapshot.pending.length ? "지금까지는 할 일이 없어요" : "오늘 할 거 다 했어요"}</h1>
+        {pendingNote ?? <p className="hero-sub">새로 생기면 여기에 바로 보여 드릴게요.</p>}
         {askEntry}
       </div>
     );
