@@ -1,11 +1,11 @@
 import { Check, ChevronDown, ChevronUp, Download, ExternalLink, Play } from "lucide-react";
 import { useState } from "react";
-import { courseById, type Assignment, type CourseId, type FileItem, type Lecture, type Notice } from "../data";
+import { courseOf, type Assignment, type CourseId, type FileItem, type Lecture, type Notice } from "../data";
 import { ago, dueLabel, sizeLabel, urgency } from "../format";
 import { jobFor, useStore } from "../store";
 
 export function CourseTag({ id }: { id: CourseId }) {
-  const c = courseById[id];
+  const c = courseOf(useStore().data, id);
   return (
     <span className="course-tag">
       <span className={`dot hue-${c.hue}`} aria-hidden="true" />
@@ -58,18 +58,18 @@ export function LectureRow({ l, showCourse = true }: { l: Lecture; showCourse?: 
     <li className="row">
       <div className="row-main">
         <span className="row-title">
-          {l.week}주차 {l.title}
+          {l.week ? `${l.week}주차 ` : ""}
+          {l.title}
         </span>
         <span className="row-meta">
           {showCourse && <CourseTag id={l.courseId} />}
-          <span>{l.minutes}분</span>
-          {!seen && <span className={`due due-${urgency(l.until)}`}>출석 인정 {dueLabel(l.until)}까지</span>}
+          {!seen && l.until && <span className={`due due-${urgency(l.until)}`}>출석 인정 {dueLabel(l.until)}까지</span>}
         </span>
       </div>
       <button
         type="button"
         className={`btn btn-row${seen ? " is-done" : ""}`}
-        aria-label={`${l.week}주차 ${l.title} ${seen ? "다시 보기" : "강의 보기"}`}
+        aria-label={`${l.title} ${seen ? "다시 보기" : "강의 보기"}`}
         title={seen ? "다시 보기" : "강의 보기"}
         onClick={() => watch(l)}
       >
@@ -118,29 +118,30 @@ export function NoticeRow({ n, showCourse = true }: { n: Notice; showCourse?: bo
 
 export function FileRow({ f, showCourse = true }: { f: FileItem; showCourse?: boolean }) {
   const { jobs, download } = useStore();
+  const { downloaded } = useStore();
   const job = jobFor(jobs, f.id);
-  const state = job?.state;
+  const state = downloaded.has(f.id) ? "done" : job?.state;
   return (
     <li className="row">
       <div className="row-main">
         <span className="row-title row-file">{f.name}</span>
         <span className="row-meta">
           {showCourse && <CourseTag id={f.courseId} />}
-          <span>{sizeLabel(f.sizeMB)}</span>
-          <span>{f.week}주차</span>
+          {f.size > 0 && <span>{sizeLabel(f.size)}</span>}
+          {f.folder && <span>{f.folder}</span>}
         </span>
       </div>
       <button
         type="button"
         className={`btn btn-row${state === "done" ? " is-done" : ""}`}
-        disabled={state === "queued" || state === "active"}
+        disabled={!f.available || state === "queued" || state === "active"}
         aria-label={`${f.name} ${state === "done" ? "다시 받기" : "받기"}`}
         title={state === "done" ? "다시 받기" : "받기"}
         onClick={() => download([f])}
       >
         {state === "done" ? <Check size={16} aria-hidden="true" /> : <Download size={16} aria-hidden="true" />}
         <span className={state === "active" ? "btn-label btn-label-keep" : "btn-label"}>
-          {state === "done" ? "받았음" : state === "active" ? `${Math.round(job!.progress * 100)}%` : state === "queued" ? "대기 중" : "받기"}
+          {!f.available ? "못 받음" : state === "done" ? "받았음" : state === "active" ? "받는 중" : state === "queued" ? "대기 중" : state === "failed" ? "다시 받기" : "받기"}
         </span>
       </button>
     </li>

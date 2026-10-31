@@ -78,7 +78,7 @@ export interface Settings {
 
 export type DownloadEvent =
   | { kind: "progress"; fileId: string; state: "active" | "done" | "failed"; error?: string }
-  | { kind: "finished"; done: number; failed: number; canceled: boolean };
+  | { kind: "finished"; ids: string[]; done: number; failed: number; canceled: boolean };
 
 /** Read-only commands a sentence may turn into. Anything else is refused. */
 export type ReadCommand =

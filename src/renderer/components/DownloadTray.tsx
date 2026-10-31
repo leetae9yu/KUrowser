@@ -8,7 +8,7 @@ export function DownloadTray() {
   const { jobs, trayHidden, cancelDownloads, clearDownloads } = useStore();
   const live = jobs.filter((j) => j.state !== "canceled");
   const done = live.filter((j) => j.state === "done").length;
-  const running = done < live.length;
+  const running = live.some((j) => j.state === "queued" || j.state === "active");
 
   // A finished batch closes itself; the result already shows where the student is looking.
   useEffect(() => {
@@ -18,9 +18,8 @@ export function DownloadTray() {
   }, [running, live.length, trayHidden, clearDownloads]);
 
   if (live.length === 0 || trayHidden) return null;
-  const total = live.reduce((sum, j) => sum + j.file.sizeMB, 0);
-  const got = live.reduce((sum, j) => sum + j.file.sizeMB * j.progress, 0);
-  const pct = Math.round((got / total) * 100);
+  const pct = Math.round((live.reduce((sum, j) => sum + j.progress, 0) / live.length) * 100);
+  const failed = live.filter((j) => j.state === "failed").length;
   const current = live.filter((j) => j.state === "active").map((j) => j.file.name);
   return (
     <aside className="tray" aria-label="자료 받기 진행">
@@ -32,7 +31,7 @@ export function DownloadTray() {
         ) : (
           <p className="tray-title">
             <Check size={16} aria-hidden="true" className="tray-ok" />
-            자료 {live.length}개를 받았어요
+            자료 {done}개를 받았어요{failed ? `, ${failed}개는 못 받았어요` : ""}
           </p>
         )}
         {running ? (
@@ -48,7 +47,7 @@ export function DownloadTray() {
       <div className="bar" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct} aria-label="전체 진행률">
         <div className="bar-fill" style={{ transform: `scaleX(${pct / 100})` }} />
       </div>
-      <p className="tray-sub">{running ? current.join(", ") || "대기 중" : "다운로드 폴더의 과목별 폴더에 저장했어요"}</p>
+      <p className="tray-sub">{running ? current.join(", ") || "대기 중" : "다운로드/KUrowser의 과목별 폴더에 저장했어요"}</p>
     </aside>
   );
 }

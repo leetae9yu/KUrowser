@@ -31,6 +31,13 @@ export function isAllowedPage(url: string): boolean {
   return isSchoolUrl(url);
 }
 
+// Observed on the live LMS: Canvas file downloads redirect to this NAVER Cloud (government) object storage host.
+export const DOWNLOAD_HOSTS: ReadonlySet<string> = new Set<string>(["kr.object.gov-ncloudstorage.com"]);
+
+export function isDownloadHost(hostname: string): boolean {
+  return isSchoolHost(hostname) || DOWNLOAD_HOSTS.has(hostname);
+}
+
 const MUTATING = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
 const DOCUMENT_TYPES = new Set(["mainFrame", "subFrame"]);

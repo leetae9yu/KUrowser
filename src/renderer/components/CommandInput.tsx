@@ -1,25 +1,45 @@
 import { Search, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
-import { interpret, type Outcome } from "../commands";
+import { outcomeFor, parseRules, type Outcome } from "../commands";
+import { suggestionsFor } from "../data";
 import { navigate } from "../router";
-import { useStore } from "../store";
+import { api, useStore } from "../store";
 
 const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
 
-/** Runs a sentence: interprets it and performs the side effect the result names. */
+/**
+ * Runs a sentence. With the AI connected, the Gateway turns it into one read-only command (the
+ * student pressed Enter, so the call may spend credit); suggestion chips and any AI failure fall
+ * back to the local rules. Only a rule-matched "받아줘" starts downloads by itself.
+ */
 export function useRunner() {
   const store = useStore();
   const ref = useRef(store);
   ref.current = store;
-  return useCallback((text: string): Outcome => {
+  return useCallback(async (text: string): Promise<Outcome> => {
     const s = ref.current;
-    const result = interpret(text, { watched: s.watched, read: s.read, downloaded: s.downloaded });
-    if (result.kind === "download") s.download(result.files);
-    if (result.kind === "theme") s.setTheme(result.theme);
-    if (result.kind === "navigate") {
-      navigate(result.route);
-      s.showToast(result.title);
+    const rules = parseRules(text, s.data);
+    if (rules.kind === "theme") {
+      s.setTheme(rules.theme);
+      return { kind: "theme", title: rules.title, theme: rules.theme };
     }
+    if (rules.kind === "navigate") {
+      navigate(rules.route);
+      s.showToast(rules.title);
+      return { kind: "navigate", title: rules.title, route: rules.route };
+    }
+    let command = rules.command;
+    let start = !!rules.start;
+    if (s.settings?.aiConnected && !suggestionsFor(s.data).includes(text)) {
+      const ai = await api().interpret(text);
+      if (ai) {
+        command = ai.command;
+        start = false;
+      }
+    }
+    const snap = { watched: s.watched, read: s.read, downloaded: s.downloaded };
+    const result = outcomeFor(command, s.data, snap, start);
+    if (result.kind === "download" && result.start) s.download(result.files);
     return result;
   }, []);
 }

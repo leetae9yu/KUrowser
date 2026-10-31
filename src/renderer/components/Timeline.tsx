@@ -7,7 +7,7 @@ import { AssignmentRow, LectureRow } from "./Rows";
 export function Timeline({ assignments, lectures }: { assignments: Assignment[]; lectures: Lecture[] }) {
   const entries: { at: Date; node: ReactElement }[] = [
     ...assignments.map((a) => ({ at: a.due, node: <AssignmentRow key={a.id} a={a} /> })),
-    ...lectures.map((l) => ({ at: l.until, node: <LectureRow key={l.id} l={l} /> })),
+    ...lectures.flatMap((l) => (l.until ? [{ at: l.until, node: <LectureRow key={l.id} l={l} /> }] : [])),
   ].sort((a, b) => a.at.getTime() - b.at.getTime());
   const days = [...new Set(entries.map((e) => dayDiff(e.at)))];
   return (

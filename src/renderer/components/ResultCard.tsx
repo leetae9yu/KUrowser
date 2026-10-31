@@ -1,18 +1,19 @@
-import { ArrowLeft, Bell, Download, ExternalLink, Play } from "lucide-react";
+import { ArrowLeft, Bell, Check, Download, ExternalLink, Play, Sparkles } from "lucide-react";
 import type { Outcome } from "../commands";
-import { courseById, files, type Notice } from "../data";
+import { courseOf, type Notice } from "../data";
 import { jobFor, useStore } from "../store";
 import { CourseList, CourseView } from "./CourseView";
 import { FileRow, LectureRow } from "./Rows";
 import { Timeline } from "./Timeline";
 
 export function Summary({ items }: { items: Notice[] }) {
+  const { data } = useStore();
   return (
     <ul className="summary-list">
       {items.map((n) => (
         <li key={n.id}>
-          <span className="summary-course">{courseById[n.courseId].name}</span>
-          <span>{n.summary}</span>
+          <span className="summary-course">{courseOf(data, n.courseId).name}</span>
+          <span>{n.summary || n.title}</span>
         </li>
       ))}
     </ul>
@@ -23,7 +24,7 @@ type Action = { label: string; icon: typeof Bell; run: () => void; done?: boolea
 
 /** The next step for a result, as one big button (plus at most one more). */
 function useNextActions(outcome: Outcome): Action[] {
-  const { watched, opened, reminders, jobs, read, markRead, remind, watch, openAssignment, download, showToast } = useStore();
+  const { data, settings, watched, opened, reminders, jobs, downloaded, read, markRead, remind, summarize, watch, openAssignment, download } = useStore();
   const out: Action[] = [];
   if (outcome.kind === "deadlines") {
     const first = outcome.assignments.find((a) => !opened.has(a.id));
@@ -34,10 +35,7 @@ function useNextActions(outcome: Outcome): Action[] {
         label: off.length ? `${off.length}개 모두 하루 전에 알림 받기` : "알림을 모두 켰어요",
         icon: Bell,
         done: off.length === 0,
-        run: () => {
-          remind(off.map((a) => a.id));
-          showToast(`마감 ${off.length}개에 하루 전 알림을 켰어요`);
-        },
+        run: () => void remind(off.map((a) => a.id)),
       });
   }
   if (outcome.kind === "deadlines" && out.length === 0) {
@@ -50,21 +48,30 @@ function useNextActions(outcome: Outcome): Action[] {
   }
   if (outcome.kind === "notices" && outcome.items.length) {
     const unread = outcome.items.filter((n) => !read.has(n.id));
+    const plain = outcome.items.filter((n) => !n.summary);
+    if (settings?.aiConnected && plain.length) {
+      out.push({ label: `${plain.length}개 한 줄로 줄이기`, icon: Sparkles, run: () => void summarize(plain.map((n) => n.id)) });
+    }
     out.push({
       label: unread.length ? "다 읽었어요" : "읽음으로 표시했어요",
-      icon: Bell,
+      icon: Check,
       done: unread.length === 0,
       run: () => markRead(unread.map((n) => n.id)),
     });
   }
   if (outcome.kind === "course") {
-    const left = files.filter((f) => f.courseId === outcome.course.id && !jobFor(jobs, f.id));
+    const left = data.files.filter((f) => f.courseId === outcome.course.id && f.available && !downloaded.has(f.id) && !jobFor(jobs, f.id));
     out.push({
       label: left.length ? `자료 ${left.length}개 모두 받기` : "자료를 모두 받았어요",
       icon: Download,
       done: left.length === 0,
       run: () => download(left),
     });
+  }
+  if (outcome.kind === "download" && !outcome.start) {
+    const left = outcome.files.filter((f) => !downloaded.has(f.id) && !jobFor(jobs, f.id));
+    if (outcome.files.length)
+      out.push({ label: left.length ? `${left.length}개 모두 받기` : "모두 받았어요", icon: Download, done: left.length === 0, run: () => download(left) });
   }
   return out;
 }
