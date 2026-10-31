@@ -146,9 +146,12 @@ export function Home() {
   useEffect(() => {
     if (!batch || batch.step >= batch.items.length) return;
     const t = batch.items[batch.step];
-    if (!started.current.has(t.id)) {
-      started.current.add(t.id);
-      void Promise.resolve(t.run()).finally(() => setRanDone((prev) => new Set(prev).add(t.id)));
+    // File tasks share one download queue, so the first one starts every file task in the batch at once.
+    const startNow = t.kind === "files" ? batch.items.slice(batch.step).filter((i) => i.kind === "files") : [t];
+    for (const item of startNow) {
+      if (started.current.has(item.id)) continue;
+      started.current.add(item.id);
+      void Promise.resolve(item.run()).finally(() => setRanDone((prev) => new Set(prev).add(item.id)));
     }
     const ready = t.kind === "files" ? filesSettled(t) : ranDone.has(t.id);
     if (!ready) return;
@@ -219,7 +222,7 @@ export function Home() {
 
   const pendingNote = snapshot.pending.length ? (
     <p className="hero-sub">
-      <LoaderCircle size={14} className="spin" aria-hidden="true" /> 강의와 자료는 아직 확인하고 있어요
+      <LoaderCircle size={14} className="spin" aria-hidden="true" /> {snapshot.pending.includes("files") ? "강의와 자료는" : "강의는"} 아직 확인하고 있어요
     </p>
   ) : null;
 
@@ -330,6 +333,13 @@ export function Home() {
     );
   } else if (mode === "batch" && batch) {
     const finished = batchDone;
+    // Lectures are not part of the batch; their check runs on and its result joins the list when it ends.
+    const unwatched = store.data.lectures.filter((l) => !store.watched.has(l.id)).length;
+    const lectureLine = snapshot.pending.includes("lectures")
+      ? "강의 출석은 따로 확인하고 있어요"
+      : unwatched
+        ? `안 본 강의 ${unwatched}개를 남은 일에 넣었어요`
+        : "안 본 강의는 없어요";
     screen = (
       <div className="stage-body">
         <h1 className="hero-title">{finished ? "끝" : "하나씩 끝내는 중이에요"}</h1>
@@ -356,6 +366,16 @@ export function Home() {
               </li>
             );
           })}
+          {finished && (
+            <li className={`step is-${snapshot.pending.includes("lectures") ? "now" : "done"}`}>
+              <span className="step-mark" aria-hidden="true">
+                {snapshot.pending.includes("lectures") ? <LoaderCircle size={16} className="spin" /> : <Check size={16} strokeWidth={3} />}
+              </span>
+              <div className="step-text">
+                <p>{lectureLine}</p>
+              </div>
+            </li>
+          )}
           {!finished && batch.step >= batch.items.length && (
             <li className="step is-now">
               <span className="step-mark" aria-hidden="true">

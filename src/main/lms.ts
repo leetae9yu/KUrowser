@@ -19,6 +19,17 @@ const FILE_NEW_DAYS = 14;
 const NOTICE_BODY_CHARS = 600;
 /** Courses read at once. Every read is a fetch inside the one hidden window, so they can overlap. */
 const COURSE_CONCURRENCY = 4;
+/** Files downloaded at once. Each download runs in Node with the window's cookies. */
+const DOWNLOAD_LANES = 3;
+
+type DownloadResult = "done" | "failed" | "canceled";
+
+interface QueuedDownload {
+  row: Raw;
+  token: { canceled: boolean };
+  progress: DownloadProgress;
+  settle: (result: DownloadResult) => void;
+}
 
 /** Map with at most `limit` calls in flight, keeping input order. */
 async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
@@ -88,6 +99,8 @@ export class LmsService {
   private listeners = new Set<(s: Snapshot) => void>();
   private refreshing: Promise<void> | null = null;
   private readonly downloadTokens = new Set<{ canceled: boolean }>();
+  private readonly downloadQueue: QueuedDownload[] = [];
+  private downloadWorker: Promise<void> | null = null;
 
   constructor(private readonly deps: LmsDeps) {}
 
@@ -114,7 +127,11 @@ export class LmsService {
     this.emit();
   }
 
-  private withSession<T>(body: (session: ElectronBrowserSession) => Promise<T>): Promise<T> {
+  /**
+   * Loads share one queue so two of them never drive the school at once. Downloads pass `queued = false`:
+   * they open their own hidden window and start while a load is still checking lectures.
+   */
+  private withSession<T>(body: (session: ElectronBrowserSession) => Promise<T>, queued = true): Promise<T> {
     const run = async (): Promise<T> => {
       const session = this.deps.makeSession();
       await session.enter();
@@ -126,6 +143,7 @@ export class LmsService {
         await session.exit();
       }
     };
+    if (!queued) return run();
     const next = this.chain.then(run, run);
     this.chain = next.catch(() => undefined);
     return next;
@@ -347,32 +365,50 @@ export class LmsService {
     for (const id of ids) if (!rows.some((row) => row.key === id)) progress(id, "failed", "받을 수 없는 자료예요");
     const token = { canceled: false };
     this.downloadTokens.add(token);
-    let done = 0;
-    let failed = ids.length - rows.length;
-    await this.withSession(async (session) => {
-      for (const row of rows) {
-        if (token.canceled) break;
-        progress(row.key, "active");
+    const results = rows.map((row) => new Promise<DownloadResult>((settle) => this.downloadQueue.push({ row, token, progress, settle })));
+    this.startDownloads();
+    const settled = await Promise.all(results).finally(() => this.downloadTokens.delete(token));
+    this.emit();
+    const done = settled.filter((r) => r === "done").length;
+    const failed = ids.length - rows.length + settled.filter((r) => r === "failed").length;
+    return { done, failed, canceled: token.canceled };
+  }
+
+  /** One hidden window serves every queued download, a few files at a time, and closes when the queue is empty. */
+  private startDownloads(): void {
+    if (this.downloadWorker || !this.downloadQueue.length) return;
+    const lane = async (session: ElectronBrowserSession): Promise<void> => {
+      for (let item = this.downloadQueue.shift(); item; item = this.downloadQueue.shift()) {
+        if (item.token.canceled) {
+          item.settle("canceled");
+          continue;
+        }
+        item.progress(item.row.key, "active");
         try {
-          await syncMaterials(session, [row], this.deps.downloadDir(), { termFolders: false });
-          done += 1;
-          progress(row.key, "done");
-          this.snap = { ...this.snap, files: this.snap.files.map((f) => (f.id === row.key ? { ...f, downloaded: true, isNew: false } : f)) };
+          await syncMaterials(session, [item.row], this.deps.downloadDir(), { termFolders: false });
+          this.snap = { ...this.snap, files: this.snap.files.map((f) => (f.id === item!.row.key ? { ...f, downloaded: true, isNew: false } : f)) };
+          item.progress(item.row.key, "done");
+          item.settle("done");
         } catch (error) {
-          if (error instanceof LoginRequired) throw error;
-          failed += 1;
           if (process.env.KUROWSER_LOG_BLOCKED) console.log(`DOWNLOAD_FAIL ${error instanceof Error ? error.message : String(error)}`);
-          progress(row.key, "failed", friendly(error));
+          item.progress(item.row.key, "failed", friendly(error));
+          item.settle("failed");
+          if (error instanceof LoginRequired) throw error;
         }
       }
-    })
+    };
+    this.downloadWorker = this.withSession((session) => Promise.all(Array.from({ length: DOWNLOAD_LANES }, () => lane(session))).then(() => undefined), false)
       .catch((error) => {
+        for (const item of this.downloadQueue.splice(0)) {
+          item.progress(item.row.key, "failed", friendly(error));
+          item.settle("failed");
+        }
         if (error instanceof LoginRequired) this.set({ ...emptySnapshot("login") });
-        throw error;
       })
-      .finally(() => this.downloadTokens.delete(token));
-    this.emit();
-    return { done, failed, canceled: token.canceled };
+      .finally(() => {
+        this.downloadWorker = null;
+        this.startDownloads();
+      });
   }
 
   loggedOut(): void {
