@@ -90,6 +90,8 @@ export interface Snapshot {
   files: FileItem[];
   /** Parts still loading in the background; the first screen does not wait for them. */
   pending: LoadPart[];
+  /** Parts that hold data, from this run or the last one; a part loaded before can answer while it is read again. */
+  loaded: LoadPart[];
   reminders: string[];
   fetchedAt: string | null;
 }
@@ -164,4 +166,6 @@ export interface KurowserApi {
   sttRun(id: string): Promise<void>;
   onStt(fn: (e: SttEvent) => void): () => void;
   openFolder(path: string): Promise<void>;
+  /** The window shows its first real screen (school data or the sign-in screen); the app records how long that took. */
+  firstScreen(): Promise<void>;
 }

@@ -1,5 +1,5 @@
 import { app, BrowserWindow, ipcMain, net, protocol, safeStorage, shell, type IpcMainInvokeEvent } from "electron";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, normalize, sep } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -8,10 +8,12 @@ import { ATTENDANCE_TOOL_ID, CANVAS_ORIGIN, liveOptions } from "../engine/live.t
 import { courseFolder } from "../engine/materials.ts";
 import type { ChatReply, DownloadEvent, ReadCommand, Settings, Snapshot, SttEvent, SttPlan } from "../shared/types.ts";
 import { GatewayClient } from "./ai.ts";
+import { DiskCache } from "./cache.ts";
 import { devConfig } from "./dev.ts";
 import { ElectronBrowserSession } from "./electron-cdp.ts";
+import { EngineHost } from "./engine-host.ts";
 import { isAiLoginUrl, isAllowedPage, isDownloadHost } from "./hosts.ts";
-import { LmsService } from "./lms.ts";
+import { type LmsCache, LmsService } from "./lms.ts";
 import { ReminderScheduler } from "./reminders.ts";
 import { SchoolPane } from "./pane.ts";
 import { keepLogin, makeEngineWindow, schoolSession, signIn, signOut } from "./school.ts";
@@ -45,14 +47,18 @@ function downloadDir(): string {
 
 const store = new StateStore(join(app.getPath("userData"), "state.json"));
 const reminders = new ReminderScheduler(store);
-const gateway = new GatewayClient();
+/** The one hidden window every school site reads through. */
+const engine = new EngineHost(engineSession);
+const gateway = new GatewayClient((job) => engine.exclusive((session) => job(session.webContents!)));
+const lmsCache = new DiskCache<LmsCache>(join(app.getPath("userData"), "lms-cache.json"), 1);
 const pane = new SchoolPane(
   () => mainWindow,
   (state) => send("pane", state),
 );
 let aiAttempted = false;
 const lms = new LmsService({
-  makeSession: engineSession,
+  engine,
+  cache: lmsCache,
   downloadDir,
   readNotices: () => new Set(store.get().readNotices),
   summaries: () => store.get().summaries,
@@ -273,7 +279,26 @@ async function sttRunOnce(id: string, emit: (e: SttEvent) => void): Promise<void
   }
 }
 
+const PERF_LOG = (): string => join(app.getPath("userData"), "perf.log");
+let firstScreenSeconds: number | null = null;
+
+/** Seconds since the process started and the memory of every app process; no school data goes into the log. */
+function recordPerf(event: "firstScreen" | "loaded"): void {
+  const memoryMb = Math.round(app.getAppMetrics().reduce((sum, m) => sum + m.memory.workingSetSize, 0) / 1024);
+  const line = { at: new Date().toISOString(), version: app.getVersion(), event, seconds: Math.round(process.uptime() * 100) / 100, memoryMb, cached: lms.fromCache };
+  try {
+    appendFileSync(PERF_LOG(), `${JSON.stringify(line)}\n`, { mode: 0o600 });
+  } catch {
+    // A read-only profile only loses the measurement.
+  }
+}
+
 function registerIpc(): void {
+  handle("firstScreen", () => {
+    if (firstScreenSeconds !== null) return;
+    firstScreenSeconds = process.uptime();
+    recordPerf("firstScreen");
+  });
   handle("sttPlan", (id: unknown) => (typeof id === "string" ? sttPlan(id) : { ok: false, text: "" }));
   handle("sttRun", (id: unknown) => {
     if (typeof id === "string") void sttRun(id);
@@ -298,6 +323,8 @@ function registerIpc(): void {
   });
   handle("logout", async () => {
     await signOut();
+    engine.signedIn = false;
+    void engine.close();
     lms.loggedOut();
   });
   handle("openAssignment", (id: unknown) => openFromSnapshot("assignment", id));
@@ -423,8 +450,13 @@ app.whenReady().then(async () => {
     return;
   }
   registerIpc();
+  let loadedRecorded = false;
   lms.subscribe((snapshot) => {
     send("snapshot", snapshot);
+    if (!loadedRecorded && snapshot.phase === "ready" && !snapshot.pending.length && snapshot.loaded.includes("lectures")) {
+      loadedRecorded = true;
+      recordPerf("loaded");
+    }
     if (snapshot.phase === "ready" && !aiAttempted && !gateway.connected && gatewayRestored) void connectAi();
   });
   reminders.start();
@@ -454,6 +486,8 @@ async function startLoading(): Promise<void> {
 app.on("activate", () => {
   if (!mainWindow || mainWindow.isDestroyed()) mainWindow = createMainWindow();
 });
+
+app.on("before-quit", () => lmsCache.flush());
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();

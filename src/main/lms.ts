@@ -8,7 +8,9 @@ import { isUnauthorized, modules as learningxModules, workItems } from "../engin
 import { ATTENDANCE_TOOL_ID, CANVAS_ORIGIN, fetchCourses, fetchRecordingPages, recordingAccessible, unwatchedRows } from "../engine/live.ts";
 import { STATE_FILENAME, courseFolder, materialCandidates, syncMaterials } from "../engine/materials.ts";
 import type { Assignment, Course, FileItem, Hue, Lecture, LoadPart, Notice, Recording, Snapshot } from "../shared/types.ts";
+import type { DiskCache } from "./cache.ts";
 import { type ElectronBrowserSession, LoginRequired } from "./electron-cdp.ts";
+import type { EngineHost } from "./engine-host.ts";
 
 type Raw = Record<string, any>;
 
@@ -68,7 +70,7 @@ export function aliasesFor(name: string): string[] {
 }
 
 function emptySnapshot(phase: Snapshot["phase"]): Snapshot {
-  return { phase, error: null, courses: [], assignments: [], lectures: [], recordings: [], notices: [], files: [], pending: [], reminders: [], fetchedAt: null };
+  return { phase, error: null, courses: [], assignments: [], lectures: [], recordings: [], notices: [], files: [], pending: [], loaded: [], reminders: [], fetchedAt: null };
 }
 
 interface Links {
@@ -79,8 +81,17 @@ interface Links {
   media: Map<string, Raw>;
 }
 
+/** What the next start shows before the school answers: the last snapshot and the school addresses behind it. */
+export interface LmsCache {
+  snapshot: Snapshot;
+  links: { [K in keyof Links]: [string, Links[K] extends Map<string, infer V> ? V : never][] };
+}
+
+const emptyLinks = (): Links => ({ assignments: new Map(), lectures: new Map(), notices: new Map(), files: new Map(), media: new Map() });
+
 export interface LmsDeps {
-  makeSession: () => ElectronBrowserSession;
+  engine: EngineHost;
+  cache: DiskCache<LmsCache>;
   downloadDir: () => string;
   readNotices: () => ReadonlySet<string>;
   summaries: () => Readonly<Record<string, string>>;
@@ -91,19 +102,33 @@ export interface LmsDeps {
 export type DownloadProgress = (fileId: string, state: "active" | "done" | "failed", error?: string) => void;
 
 export class LmsService {
-  private chain: Promise<unknown> = Promise.resolve();
   private snap: Snapshot = emptySnapshot("loading");
   private raws = new Map<string, Raw>();
   /** Attendance read while getting the LearningX token, reused by the lecture pass of the same load. */
   private warmAttendance = new Map<string, Raw>();
-  private links: Links = { assignments: new Map(), lectures: new Map(), notices: new Map(), files: new Map(), media: new Map() };
+  private links: Links = emptyLinks();
   private listeners = new Set<(s: Snapshot) => void>();
   private refreshing: Promise<void> | null = null;
   private readonly downloadTokens = new Set<{ canceled: boolean }>();
   private readonly downloadQueue: QueuedDownload[] = [];
   private downloadWorker: Promise<void> | null = null;
+  /** This run started from the data of the last run. */
+  readonly fromCache: boolean;
 
-  constructor(private readonly deps: LmsDeps) {}
+  constructor(private readonly deps: LmsDeps) {
+    const cached = deps.cache.read();
+    this.fromCache = !!cached?.snapshot.courses.length;
+    if (cached && this.fromCache) {
+      this.snap = { ...emptySnapshot("ready"), ...cached.snapshot, phase: "ready", pending: [], error: null };
+      this.links = {
+        assignments: new Map(cached.links.assignments),
+        lectures: new Map(cached.links.lectures),
+        notices: new Map(cached.links.notices),
+        files: new Map(cached.links.files),
+        media: new Map(cached.links.media),
+      };
+    }
+  }
 
   snapshot(): Snapshot {
     return {
@@ -123,31 +148,54 @@ export class LmsService {
     for (const fn of this.listeners) fn(s);
   }
 
+  /** Applies a change and tells the window only when something it shows actually changed. */
   private set(change: Partial<Snapshot>): void {
+    const old = this.snap as unknown as Record<string, unknown>;
+    const changed = Object.entries(change).some(([key, value]) => JSON.stringify(old[key]) !== JSON.stringify(value));
     this.snap = { ...this.snap, ...change };
+    if (!changed) return;
+    if (this.snap.phase === "ready") this.remember();
     this.emit();
   }
 
+  private remember(): void {
+    const entries = <V>(map: Map<string, V>): [string, V][] => [...map.entries()];
+    this.deps.cache.write({
+      snapshot: { ...this.snap, pending: [], error: null },
+      links: {
+        assignments: entries(this.links.assignments),
+        lectures: entries(this.links.lectures),
+        notices: entries(this.links.notices),
+        files: entries(this.links.files),
+        media: entries(this.links.media),
+      },
+    });
+  }
+
+  /** The sign-in check navigates the window, so it only ever runs inside a navigating (exclusive) turn. */
+  private async signIn(session: ElectronBrowserSession): Promise<void> {
+    const engine = this.deps.engine;
+    if (engine.signedIn) return;
+    await session.login();
+    engine.signedIn = true;
+    await this.deps.onLogin();
+  }
+
   /**
-   * Loads share one queue so two of them never drive the school at once. Downloads pass `queued = false`:
-   * they open their own hidden window and start while a load is still checking lectures.
+   * Every job runs in the one shared hidden window. Loads navigate it, so they queue behind other navigating jobs
+   * (another load, a site sign-in). Downloads pass `queued = false`: they only read its cookies and start while a
+   * load is still checking lectures; when the window has not signed in yet, they wait for a sign-in turn first.
    */
-  private withSession<T>(body: (session: ElectronBrowserSession) => Promise<T>, queued = true): Promise<T> {
-    const run = async (): Promise<T> => {
-      const session = this.deps.makeSession();
-      await session.enter();
-      try {
-        await session.login();
-        await this.deps.onLogin();
-        return await body(session);
-      } finally {
-        await session.exit();
-      }
-    };
-    if (!queued) return run();
-    const next = this.chain.then(run, run);
-    this.chain = next.catch(() => undefined);
-    return next;
+  private async withSession<T>(body: (session: ElectronBrowserSession) => Promise<T>, queued = true): Promise<T> {
+    const engine = this.deps.engine;
+    if (queued) {
+      return engine.exclusive(async (session) => {
+        await this.signIn(session);
+        return body(session);
+      });
+    }
+    if (!engine.signedIn) await engine.exclusive((session) => this.signIn(session));
+    return engine.shared(body);
   }
 
   /** The first load waits on an OS keychain prompt; the window says so instead of a bare spinner. */
@@ -166,20 +214,27 @@ export class LmsService {
     if (this.snap.phase !== "ready") this.set({ phase: "loading", error: null });
     else this.set({ pending: ["lectures", "files"] });
     try {
-      // One hidden window for the whole load. Files come before lectures: new files feed
-      // [한 번에 끝내기], and lectures need one attendance page per course, which is the slow part.
+      // Files come before lectures: new files feed [한 번에 끝내기], and lectures need one attendance page per
+      // course, which is the slow part. Lectures take the window in a second turn, so a site sign-in waiting for the
+      // window (the AI key, a portal read) runs between the two instead of after the whole minute.
       await this.withSession(async (session) => {
         await this.loadCourses(session);
-        this.set({ phase: "ready", pending: ["files", "lectures"], fetchedAt: new Date().toISOString() });
-        await this.loadFiles(session).catch((error) => this.partFailed("files", error));
+        this.set({ phase: "ready", pending: ["files", "lectures"], loaded: this.withLoaded("courses"), fetchedAt: new Date().toISOString() });
+        await this.loadFiles(session).then(() => this.set({ loaded: this.withLoaded("files") })).catch((error) => this.partFailed("files", error));
         this.set({ pending: this.snap.pending.filter((p) => p !== "files") });
-        await this.loadLectures(session).catch((error) => this.partFailed("lectures", error));
+      });
+      await this.withSession(async (session) => {
+        await this.loadLectures(session).then(() => this.set({ loaded: this.withLoaded("lectures") })).catch((error) => this.partFailed("lectures", error));
         this.set({ pending: [] });
       });
     } catch (error) {
       if (error instanceof LoginRequired) this.set({ ...emptySnapshot("login") });
       else this.set({ phase: this.snap.courses.length ? "ready" : "error", pending: [], error: friendly(error) });
     }
+  }
+
+  private withLoaded(part: LoadPart): LoadPart[] {
+    return [...new Set([...this.snap.loaded, part])];
   }
 
   private partFailed(part: LoadPart, error: unknown): void {
@@ -436,8 +491,9 @@ export class LmsService {
   }
 
   loggedOut(): void {
-    this.links = { assignments: new Map(), lectures: new Map(), notices: new Map(), files: new Map(), media: new Map() };
+    this.links = emptyLinks();
     this.raws.clear();
+    this.deps.cache.clear();
     this.set({ ...emptySnapshot("login") });
   }
 }
