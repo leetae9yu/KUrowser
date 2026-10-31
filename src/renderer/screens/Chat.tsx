@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ChatReply, ReadCommand } from "../../shared/types";
-import { outcomeFor, parseRules, recordingsOutcome, type Outcome } from "../commands";
+import { outcomeFor, parseRules, recordingsOutcome, type Outcome, type Parsed } from "../commands";
 import { CommandInput } from "../components/CommandInput";
 import { ResultCard } from "../components/ResultCard";
 import { suggestionsFor } from "../data";
@@ -67,6 +67,7 @@ export function Chat({ active }: { active: boolean }) {
   const asked = messages.some((m) => m.from === "user");
   const count = messages.length + (busy ? 1 : 0);
   const seen = useRef(0);
+  const queued = useRef<string | null>(null);
 
   useLayoutEffect(() => {
     const thread = threadRef.current;
@@ -103,11 +104,37 @@ export function Chat({ active }: { active: boolean }) {
     setMessages((prev) => [...prev, { ...draft, id: seq.current }]);
   };
 
-  const send = async (text: string) => {
+  // A request that needs data still loading waits for it instead of answering "none" from an empty list.
+  const waiting = (rules: Parsed): boolean => {
+    const snap = latest.current.snapshot;
+    if (rules.kind === "theme" || rules.kind === "navigate") return false;
+    if (snap.phase !== "ready") return true;
+    if (rules.kind === "recordings") return snap.pending.includes("lectures");
+    const c = rules.command.command;
+    if (c === "lectures" || c === "deadlines") return snap.pending.includes("lectures");
+    if (c === "files") return snap.pending.includes("files");
+    return false;
+  };
+
+  useEffect(() => {
+    const text = queued.current;
+    if (!text || busy) return;
+    if (waiting(parseRules(text, store.data))) return;
+    queued.current = null;
+    void send(text, false);
+  });
+
+  const send = async (text: string, echo = true) => {
     if (busy) return;
-    push({ from: "user", text });
+    if (echo) push({ from: "user", text });
     const s = latest.current;
     const rules = parseRules(text, s.data);
+    if (waiting(rules)) {
+      queued.current = text;
+      const login = s.snapshot.phase === "login" || s.snapshot.phase === "keychain";
+      push({ from: "app", kind: "text", text: login ? "학교 로그인이 끝나면 이어서 할게요" : "아직 불러오는 중이에요. 끝나면 이어서 할게요", tone: "plain" });
+      return;
+    }
     if (rules.kind === "theme") {
       s.setTheme(rules.theme);
       push({ from: "app", kind: "text", text: rules.title, tone: "plain" });

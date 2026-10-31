@@ -72,15 +72,28 @@ export function courseOf(data: Data, id: CourseId): Course {
   return data.courseById[id] ?? unknownCourse;
 }
 
+/** A course name as students say it: no [학생]/[한국어] tags, term code, year, English title or section. */
+export function shortCourseName(name: string): string {
+  const short = name
+    .replace(/\[[^\]]*\]/g, " ")
+    .replace(/^\s*\d{3}[A-Z]?\s*\([^)]*\)/, " ")
+    .replace(/\b20\d{2}\b/g, " ")
+    .replace(/\s*-\s*\d+분반\s*$/, "")
+    .replace(/\s*\([^)]*\)\s*$/, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return short || name;
+}
+
 export function suggestionsFor(data: Data): string[] {
-  const first = data.courses[0]?.name;
+  const first = data.courses[0] && shortCourseName(data.courses[0].name);
   return [
     "이번 주 마감 뭐 있어",
     first ? `${first} 자료 다 받아줘` : "새 자료 다 받아줘",
     "안 본 강의 몇 개야",
     "녹화강의 요약해줘",
     "공지 요약해줘",
-    data.courses[1] ? `${data.courses[1].name} 열어줘` : "과목 전체 보기",
+    data.courses[1] ? `${shortCourseName(data.courses[1].name)} 열어줘` : "과목 전체 보기",
     "과목 전체 보기",
   ].filter((s, i, all) => all.indexOf(s) === i);
 }
