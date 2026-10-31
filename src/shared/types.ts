@@ -130,6 +130,25 @@ export interface SchoolMenu {
   url: string;
 }
 
+/** One reading room's free seats right now. */
+export interface SeatRoom {
+  library: string;
+  name: string;
+  total: number;
+  available: number;
+  hours: string;
+}
+
+/** A book the student has out; dates are `YYYY-MM-DD`. */
+export interface Loan {
+  id: string;
+  title: string;
+  place: string;
+  loanedAt: string;
+  due: string;
+  renewals: number;
+}
+
 export interface SiteState<T> {
   data: T;
   fetchedAt: string | null;
@@ -139,6 +158,8 @@ export interface SiteState<T> {
 /** School sites besides the LMS, read with the same portal login; each part loads and fails on its own. */
 export interface SitesSnapshot {
   portal: SiteState<{ notices: PortalNotice[]; schedule: ScheduleEntry[] }>;
+  /** Loans need the library's own sign-in, which the app does with the portal login; `signedIn` false means it failed. */
+  library: SiteState<{ loans: Loan[]; signedIn: boolean }>;
   menus: SchoolMenu[];
 }
 
@@ -227,4 +248,6 @@ export interface KurowserApi {
   /** Opens a school page from `SitesSnapshot.menus` on the left; false when that menu does not exist. */
   openMenu(id: string): Promise<boolean>;
   openPortalNotice(id: string): Promise<void>;
+  /** Reading-room seats, read again when older than a minute. */
+  seats(): Promise<{ rooms: SeatRoom[]; at: string | null; error: string | null }>;
 }

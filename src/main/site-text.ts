@@ -11,6 +11,38 @@ export class SiteError extends Error {
   override name = "SiteError";
 }
 
+/** School sites the app reads besides the LMS. Reads go out with the portal login cookies of the app's one session. */
+export const SITE_HOSTS: ReadonlySet<string> = new Set([
+  "portal.korea.ac.kr",
+  "registrar.korea.ac.kr",
+  "librsv.korea.ac.kr",
+  "library.korea.ac.kr",
+  "ams.korea.ac.kr",
+]);
+
+/** An https address on one of the site hosts; anything else is refused before it is sent. */
+export function siteUrl(url: string): URL {
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    throw new SiteError("허용하지 않은 학교 주소예요");
+  }
+  if (u.protocol !== "https:" || !SITE_HOSTS.has(u.hostname) || u.username || u.password || u.port) throw new SiteError("허용하지 않은 학교 주소예요");
+  return u;
+}
+
+/** The next address of a redirect, held to the same site hosts as the first request. */
+export function nextHop(current: string, location: string): string {
+  let next: string;
+  try {
+    next = new URL(location, current).href;
+  } catch {
+    throw new SiteError("허용하지 않은 학교 주소예요");
+  }
+  return siteUrl(next).href;
+}
+
 /** Text inside the element whose opening tag carries `marker` (a class or id), counting nested tags of its kind. */
 export function innerHtml(html: string, marker: string): string | null {
   const at = html.indexOf(marker);

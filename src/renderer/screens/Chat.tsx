@@ -1,7 +1,7 @@
 import { Check } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ChatReply, ReadCommand } from "../../shared/types";
-import { outcomeFor, parseRules, portalOutcome, recordingsOutcome, scheduleOutcome, type Outcome, type Parsed } from "../commands";
+import { loansOutcome, outcomeFor, parseRules, portalOutcome, recordingsOutcome, scheduleOutcome, seatsOutcome, type Outcome, type Parsed } from "../commands";
 import { CommandInput } from "../components/CommandInput";
 import { ResultCard } from "../components/ResultCard";
 import { suggestionsFor } from "../data";
@@ -127,7 +127,11 @@ export function Chat({ active }: { active: boolean }) {
   // A request that needs data still loading waits for it instead of answering "none" from an empty list.
   const waiting = (rules: Parsed): boolean => {
     const snap = latest.current.snapshot;
-    if (rules.kind === "theme" || rules.kind === "navigate" || rules.kind === "menu" || rules.kind === "menus") return false;
+    if (rules.kind === "theme" || rules.kind === "navigate" || rules.kind === "menu" || rules.kind === "menus" || rules.kind === "seats") return false;
+    if (rules.kind === "loans") {
+      const library = latest.current.sites.library;
+      return !library.fetchedAt && !library.error && library.data.signedIn;
+    }
     if (rules.kind === "portal" || rules.kind === "schedule") {
       const portal = latest.current.sites.portal;
       return !portal.fetchedAt && !portal.error;
@@ -158,7 +162,7 @@ export function Chat({ active }: { active: boolean }) {
     const rules = parseRules(text, s.data, s.sites);
     if (waiting(rules)) {
       queued.current = [...queued.current, text];
-      const site = rules.kind === "portal" || rules.kind === "schedule";
+      const site = rules.kind === "portal" || rules.kind === "schedule" || rules.kind === "loans";
       const login = !site && (s.snapshot.phase === "login" || s.snapshot.phase === "keychain");
       push({ from: "app", kind: "text", text: login ? "학교 로그인이 끝나면 이어서 할게요" : "아직 불러오는 중이에요. 끝나면 이어서 할게요", tone: "plain" });
       return;
@@ -183,6 +187,20 @@ export function Chat({ active }: { active: boolean }) {
     }
     if (rules.kind === "schedule") {
       push({ from: "app", kind: "result", outcome: scheduleOutcome(s.sites, rules.word) });
+      return;
+    }
+    if (rules.kind === "loans") {
+      push({ from: "app", kind: "result", outcome: loansOutcome(s.sites) });
+      return;
+    }
+    if (rules.kind === "seats") {
+      setBusy(true);
+      try {
+        const seats = await api().seats();
+        push({ from: "app", kind: "result", outcome: seatsOutcome(seats.rooms, rules.library, seats.error) });
+      } finally {
+        setBusy(false);
+      }
       return;
     }
     if (rules.kind === "menus") {

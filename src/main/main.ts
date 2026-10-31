@@ -51,7 +51,8 @@ const store = new StateStore(join(app.getPath("userData"), "state.json"));
 const reminders = new ReminderScheduler(store);
 /** The one hidden window every school site reads through. */
 const engine = new EngineHost(engineSession);
-const gateway = new GatewayClient((job) => engine.exclusive((session) => job(session.webContents!)));
+const hidden = <T>(job: (wc: Electron.WebContents) => Promise<T>): Promise<T> => engine.exclusive((session) => job(session.webContents!));
+const gateway = new GatewayClient(hidden);
 const lmsCache = new DiskCache<LmsCache>(join(app.getPath("userData"), "lms-cache.json"), 1);
 const pane = new SchoolPane(
   () => mainWindow,
@@ -62,6 +63,8 @@ let aiAttempted = false;
 const sitesCache = new DiskCache<SitesCache>(join(app.getPath("userData"), "sites-cache.json"), 1);
 const sites = new SitesService({
   get: siteGet,
+  hidden,
+  keepLogin: () => keepLogin(),
   cache: sitesCache,
   readNotices: () => new Set(store.get().readNotices),
 });
@@ -336,6 +339,7 @@ function registerIpc(): void {
   handle("snapshot", (): Snapshot => lms.snapshot());
   handle("sites", () => sites.snapshot());
   handle("refreshSites", () => sites.refresh());
+  handle("seats", () => sites.seats());
   handle("openMenu", (id: unknown) => {
     const menu = sites.snapshot().menus.find((m) => m.id === id);
     return !!menu && !!pane.open(menu.url);

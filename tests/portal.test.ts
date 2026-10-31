@@ -7,6 +7,7 @@ import type { SitesSnapshot } from "../src/shared/types.ts";
 const noData = { courses: [], courseById: {}, assignments: [], lectures: [], recordings: [], notices: [], files: [] };
 const sites = (schedule: SitesSnapshot["portal"]["data"]["schedule"] = []): SitesSnapshot => ({
   portal: { data: { notices: [], schedule }, fetchedAt: "2026-10-31T00:00:00Z", error: null },
+  library: { data: { loans: [], signedIn: true }, fetchedAt: null, error: null },
   menus: [...SCHOOL_MENUS],
 });
 
