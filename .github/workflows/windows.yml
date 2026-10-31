@@ -1,0 +1,78 @@
+name: Windows build
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to attach the installers to (empty builds only)
+        required: false
+        default: ""
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - .github/workflows/windows.yml
+      - .github/scripts/smoke.mjs
+      - package.json
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Windows ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: windows-latest
+          - arch: arm64
+            runner: windows-11-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      - name: Build NSIS installer
+        run: bun run build && bunx electron-builder --win nsis --${{ matrix.arch }} --publish never
+
+      - name: Install silently and open the first window
+        shell: pwsh
+        run: |
+          $setup = Get-ChildItem release -Filter "KUrowser-*-${{ matrix.arch }}-setup.exe" | Select-Object -First 1
+          if (-not $setup) { throw "installer not found" }
+          Start-Process -FilePath $setup.FullName -ArgumentList "/S" -Wait
+          $exe = Get-ChildItem "$env:LOCALAPPDATA\Programs" -Recurse -Filter "KUrowser.exe" | Select-Object -First 1
+          if (-not $exe) { throw "installed KUrowser.exe not found" }
+          Write-Host "installed: $($exe.FullName)"
+          $app = Start-Process -FilePath $exe.FullName -ArgumentList "--remote-debugging-port=9333" -PassThru
+          $env:SMOKE_SHOT = "smoke-${{ matrix.arch }}.png"
+          node .github/scripts/smoke.mjs
+          $code = $LASTEXITCODE
+          Stop-Process -Id $app.Id -Force -ErrorAction SilentlyContinue
+          Get-Process KUrowser -ErrorAction SilentlyContinue | Stop-Process -Force
+          exit $code
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kurowser-windows-${{ matrix.arch }}
+          path: |
+            release/KUrowser-*-setup.exe
+            smoke-${{ matrix.arch }}.png
+          if-no-files-found: warn
+
+      - name: Attach to release
+        if: github.event_name == 'push' || inputs.tag != ''
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
+        run: gh release upload $env:TAG (Get-ChildItem release -Filter "KUrowser-*-setup.exe").FullName --clobber --repo $env:GITHUB_REPOSITORY
