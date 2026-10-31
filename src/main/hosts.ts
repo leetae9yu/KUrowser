@@ -60,7 +60,7 @@ export function engineRequestAllowed(method: string, url: string, resourceType: 
   const u = parse(url);
   // The AI site signs in inside the same hidden window; its own login hand-off posts are not school writes.
   if (u && AI_SITE_HOSTS.has(u.hostname) && isAiLoginUrl(url)) return true;
-  if (u?.protocol === "https:" && u.hostname === "sso.korea.ac.kr" && SSO_MAIL_CODE.has(u.pathname)) return true;
+  if (method.toUpperCase() === "POST" && u?.protocol === "https:" && u.hostname === "sso.korea.ac.kr" && SSO_MAIL_CODE.has(u.pathname)) return true;
   if (!DOCUMENT_TYPES.has(resourceType)) return false;
   if (u?.protocol === "https:" && u.hostname === "ams.korea.ac.kr") return AMS_RELAY.test(u.pathname);
   // The LMS sign-in relay the SSO posts back to (observed on a password sign-in in the hidden window).

@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
 
 import { AMS_LOOKUPS, AmsSignedOut, enrolledCredits, lookupForm, lookupSets, periodSpan, pickTerm, signedIn, summary, timetable } from "../src/main/ams-data.ts";
+import { AmsService } from "../src/main/ams.ts";
 import { parseRules } from "../src/renderer/commands.ts";
+import type { AmsState } from "../src/shared/types.ts";
 
 const noData = { courses: [], courseById: {}, assignments: [], lectures: [], recordings: [], notices: [], files: [] };
 
@@ -59,6 +61,38 @@ describe("timetable and credits", () => {
       gradeSets: { dsGradeAll: [{ ratlcSyySmtNm: "2026학년도 1학기", subjtNm: "가짜과목", cmpsjDivNm: "전공", cdt: "3", gradeGrdDivcd: "A0" }], dsGradeAcmtlAll: [{ gpa: "9.99", cmpsjCdt: "999" }] },
     });
     expect(s).toMatchObject({ term: "2026학년도 2학기", enrolledCredits: 3, gpa: "9.99", earned: "999", grades: [{ title: "가짜과목", grade: "A0", credits: "3" }] });
+  });
+});
+
+describe("logout during a read", () => {
+  test("a read that finishes after logout leaves no data and saves no cookies", async () => {
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    const seen: AmsState[] = [];
+    let kept = 0;
+    const answer = (sets: unknown) => ({ status: 200, url: "", text: JSON.stringify(sets) });
+    const ams = new AmsService({
+      get: async () => answer({ dmLoginConfirm: { isLogin: "1" } }),
+      post: async (path) => {
+        await held;
+        return path === AMS_LOOKUPS.terms.path ? answer({ dsSyySmtDivcd: [{ code: "20262R", fullNm: "가짜 학기" }] }) : answer({});
+      },
+      hidden: async () => {
+        throw new Error("no window in this test");
+      },
+      onChange: (s) => seen.push(s),
+      keepLogin: async () => {
+        kept += 1;
+      },
+    });
+    const run = ams.start();
+    await Promise.resolve();
+    ams.clear();
+    release();
+    await run;
+    expect(ams.snapshot()).toEqual({ phase: "idle", data: null, at: null });
+    expect(seen.some((s) => s.phase === "ready")).toBe(false);
+    expect(kept).toBe(0);
   });
 });
 

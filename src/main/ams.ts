@@ -20,7 +20,7 @@ const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
 const pathShape = (url: string): string => {
   try {
     const u = new URL(url);
-    return `${u.host}${u.pathname.replace(/\d+/g, "N")}${u.search ? `?${[...u.searchParams.keys()].join(",")}` : ""}`;
+    return `${u.host}${u.pathname.split(";")[0]!.replace(/\d+/g, "N")}${u.search ? `?${[...u.searchParams.keys()].join(",")}` : ""}`;
   } catch {
     return "?";
   }
@@ -90,6 +90,9 @@ export class AmsService {
   private state: AmsState = { phase: "idle", data: null, at: null };
   private code: ((code: string | null) => void) | null = null;
   private running: Promise<void> | null = null;
+  /** Bumped at logout; a sign-in or read started before it may no longer change state or save cookies. */
+  private generation = 0;
+  private runGeneration = -1;
 
   constructor(private readonly deps: AmsDeps) {}
 
@@ -98,16 +101,19 @@ export class AmsService {
   }
 
   private set(change: Partial<AmsState>): void {
+    if (this.runGeneration !== this.generation) return;
     this.state = { ...this.state, needsLogin: undefined, ...change };
     this.deps.onChange(this.state);
   }
 
   /** Reads again with the session it has, or signs in (mail code) first. */
   start(): Promise<void> {
-    this.running ??= this.run().finally(() => {
-      this.running = null;
+    if (this.running) return this.running;
+    const run: Promise<void> = this.run().finally(() => {
+      if (this.running === run) this.running = null;
     });
-    return this.running;
+    this.running = run;
+    return run;
   }
 
   /** The student typed the mailed code; false when no sign-in is waiting for one. */
@@ -122,16 +128,19 @@ export class AmsService {
   }
 
   clear(): void {
+    this.generation += 1;
     this.cancel();
+    this.running = null;
     this.state = { phase: "idle", data: null, at: null };
     this.deps.onChange(this.state);
   }
 
   private async run(): Promise<void> {
+    const generation = (this.runGeneration = this.generation);
     try {
       if (!(await this.sessionAlive())) {
         const ok = await this.signIn();
-        if (!ok) return;
+        if (!ok || generation !== this.generation) return;
         await this.deps.keepLogin();
       }
       this.set({ phase: "loading", message: undefined });
@@ -184,7 +193,10 @@ export class AmsService {
     for (let tries = 0; ; tries++) {
       this.set({ phase: "code", mask: sent.mask, message: tries ? "인증번호가 맞지 않아요. 다시 넣어 주세요" : undefined });
       const code = await new Promise<string | null>((resolve) => {
-        const timer = setTimeout(() => resolve(null), CODE_WAIT_MS);
+        const timer = setTimeout(() => {
+          this.code = null;
+          resolve(null);
+        }, CODE_WAIT_MS);
         this.code = (value) => {
           clearTimeout(timer);
           this.code = null;
