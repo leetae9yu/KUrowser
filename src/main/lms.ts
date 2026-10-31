@@ -69,7 +69,7 @@ export class LmsService {
   private links: Links = { assignments: new Map(), lectures: new Map(), notices: new Map(), files: new Map() };
   private listeners = new Set<(s: Snapshot) => void>();
   private refreshing: Promise<void> | null = null;
-  private cancelRequested = false;
+  private readonly downloadTokens = new Set<{ canceled: boolean }>();
 
   constructor(private readonly deps: LmsDeps) {}
 
@@ -286,18 +286,19 @@ export class LmsService {
   }
 
   cancelDownloads(): void {
-    this.cancelRequested = true;
+    for (const token of this.downloadTokens) token.canceled = true;
   }
 
   async download(ids: string[], progress: DownloadProgress): Promise<{ done: number; failed: number; canceled: boolean }> {
     const rows = ids.map((id) => this.links.files.get(id)).filter((row): row is Raw => !!row && !!row.download_url);
     for (const id of ids) if (!rows.some((row) => row.key === id)) progress(id, "failed", "받을 수 없는 자료예요");
-    this.cancelRequested = false;
+    const token = { canceled: false };
+    this.downloadTokens.add(token);
     let done = 0;
     let failed = ids.length - rows.length;
     await this.withSession(async (session) => {
       for (const row of rows) {
-        if (this.cancelRequested) break;
+        if (token.canceled) break;
         progress(row.key, "active");
         try {
           await syncMaterials(session, [row], this.deps.downloadDir(), { termFolders: false });
@@ -307,15 +308,18 @@ export class LmsService {
         } catch (error) {
           if (error instanceof LoginRequired) throw error;
           failed += 1;
+          if (process.env.KUROWSER_LOG_BLOCKED) console.log(`DOWNLOAD_FAIL ${error instanceof Error ? error.message : String(error)}`);
           progress(row.key, "failed", friendly(error));
         }
       }
-    }).catch((error) => {
-      if (error instanceof LoginRequired) this.set({ ...emptySnapshot("login") });
-      throw error;
-    });
+    })
+      .catch((error) => {
+        if (error instanceof LoginRequired) this.set({ ...emptySnapshot("login") });
+        throw error;
+      })
+      .finally(() => this.downloadTokens.delete(token));
     this.emit();
-    return { done, failed, canceled: this.cancelRequested };
+    return { done, failed, canceled: token.canceled };
   }
 
   loggedOut(): void {

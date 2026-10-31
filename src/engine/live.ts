@@ -47,10 +47,12 @@ export interface LiveOptions {
   timeoutSeconds: number;
   chromePath: string | null;
   attachPort: number | null;
+  /** Hosts a material download may be redirected to; the CLI keeps the original any-host behavior. */
+  allowDownloadHost: (hostname: string) => boolean;
 }
 
 export function liveOptions(overrides: Partial<LiveOptions> = {}): LiveOptions {
-  return { entryUrl: DEFAULT_ENTRY_URL, headless: true, timeoutSeconds: 60, chromePath: null, attachPort: null, ...overrides };
+  return { entryUrl: DEFAULT_ENTRY_URL, headless: true, timeoutSeconds: 60, chromePath: null, attachPort: null, allowDownloadHost: () => true, ...overrides };
 }
 
 export interface BrowserSession {
@@ -1242,7 +1244,7 @@ export class CdpBrowserSession implements BrowserSession {
     if (!CANVAS_HOSTS.has(new URL(absolute).hostname)) throw new LiveCommandError("material download must start on the KU LMS host");
     const cookies = await this.requireClient().send("Network.getCookies", { urls: [absolute] });
     const cookie = ((cookies.cookies || []) as Raw[]).map((item) => `${item.name}=${item.value}`).join("; ");
-    return downloadWithCanvasCookie(absolute, cookie, target, this.options.timeoutSeconds);
+    return downloadWithCanvasCookie(absolute, cookie, target, this.options.timeoutSeconds, CANVAS_HOSTS, this.options.allowDownloadHost);
   }
 
   requireClient(): CdpTransport {
@@ -1278,8 +1280,17 @@ async function withTimeout<T>(promise: Promise<T>, seconds: number, onTimeout: (
 const REDIRECT_CODES = new Set([301, 302, 303, 307, 308]);
 
 /** Follow redirects by hand so the LMS session cookie is never sent to storage hosts. */
-export async function downloadWithCanvasCookie(url: string, cookie: string, target: string, timeout: number, hosts: ReadonlySet<string> = CANVAS_HOSTS): Promise<number> {
+export async function downloadWithCanvasCookie(
+  url: string,
+  cookie: string,
+  target: string,
+  timeout: number,
+  hosts: ReadonlySet<string> = CANVAS_HOSTS,
+  allowHost: (hostname: string) => boolean = () => true,
+): Promise<number> {
   for (let hop = 0; hop < 6; hop++) {
+    const hostname = new URL(url).hostname;
+    if (!hosts.has(hostname) && !allowHost(hostname)) throw new LiveCommandError(`material download was redirected to a host outside the allowlist: ${hostname}`);
     const headers: Record<string, string> = hosts.has(new URL(url).hostname) && cookie ? { Cookie: cookie } : {};
     let response: Response;
     try {

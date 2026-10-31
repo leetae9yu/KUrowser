@@ -77,7 +77,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           prev.map((j) => (j.id === e.fileId && j.state !== "canceled" ? { ...j, state: e.state, progress: e.state === "active" ? 0.5 : 1 } : j)),
         );
       } else {
-        setJobs((prev) => prev.map((j) => (j.state === "queued" || j.state === "active" ? { ...j, state: e.canceled ? "canceled" : "failed" } : j)));
+        const mine = new Set(e.ids);
+        setJobs((prev) => prev.map((j) => (mine.has(j.id) && (j.state === "queued" || j.state === "active") ? { ...j, state: e.canceled ? "canceled" : "failed" } : j)));
       }
     });
     return () => {

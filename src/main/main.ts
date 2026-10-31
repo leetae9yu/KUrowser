@@ -9,7 +9,7 @@ import type { DownloadEvent, ReadCommand, Settings, Snapshot } from "../shared/t
 import { GatewayClient } from "./ai.ts";
 import { devConfig } from "./dev.ts";
 import { ElectronBrowserSession } from "./electron-cdp.ts";
-import { isAiLoginUrl, isAllowedPage } from "./hosts.ts";
+import { isAiLoginUrl, isAllowedPage, isDownloadHost } from "./hosts.ts";
 import { LmsService } from "./lms.ts";
 import { ReminderScheduler } from "./reminders.ts";
 import { keepLogin, makeEngineWindow, openSchoolWindow, schoolSession, signIn, signOut } from "./school.ts";
@@ -26,7 +26,7 @@ let mainWindow: BrowserWindow | null = null;
 protocol.registerSchemesAsPrivileged([{ scheme: "app", privileges: { standard: true, secure: true, supportFetchAPI: true } }]);
 
 export function engineSession(): ElectronBrowserSession {
-  return new ElectronBrowserSession(devConfig(), liveOptions({ timeoutSeconds: 60 }), makeEngineWindow);
+  return new ElectronBrowserSession(devConfig(), liveOptions({ timeoutSeconds: 60, allowDownloadHost: isDownloadHost }), makeEngineWindow);
 }
 
 function downloadDir(): string {
@@ -47,7 +47,8 @@ const lms = new LmsService({
 });
 
 function send(channel: string, payload: unknown): void {
-  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, payload);
+  if (!mainWindow || mainWindow.isDestroyed() || !mainWindow.webContents.getURL().startsWith(`${APP_ORIGIN}/`)) return;
+  mainWindow.webContents.send(channel, payload);
 }
 
 function serveRenderer(): void {
@@ -135,9 +136,9 @@ function registerIpc(): void {
       send("download", { kind: "progress", fileId, state, error } satisfies DownloadEvent);
     try {
       const result = await lms.download(strings(ids), progress);
-      send("download", { kind: "finished", ...result } satisfies DownloadEvent);
+      send("download", { kind: "finished", ids: strings(ids), ...result } satisfies DownloadEvent);
     } catch {
-      send("download", { kind: "finished", done: 0, failed: strings(ids).length, canceled: false } satisfies DownloadEvent);
+      send("download", { kind: "finished", ids: strings(ids), done: 0, failed: strings(ids).length, canceled: false } satisfies DownloadEvent);
     }
   });
   handle("cancelDownloads", () => lms.cancelDownloads());
@@ -180,6 +181,9 @@ function createMainWindow(): BrowserWindow {
     webPreferences: { preload: join(DIST_DIR, "main", "preload.js"), sandbox: true, contextIsolation: true, nodeIntegration: false },
   });
   win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  win.webContents.on("will-navigate", (event, url) => {
+    if (!url.startsWith(`${APP_ORIGIN}/`)) event.preventDefault();
+  });
   win.on("focus", () => {
     const fetchedAt = lms.snapshot().fetchedAt;
     if (fetchedAt && Date.now() - Date.parse(fetchedAt) > STALE_MS) void lms.refresh();

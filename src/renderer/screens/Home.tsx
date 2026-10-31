@@ -69,11 +69,20 @@ export function Home() {
     setCursor(tasks[(index + step + tasks.length) % tasks.length].id);
   };
 
+  const failedCount = (t: Task) => (t.files ?? []).filter((f) => jobFor(jobs, f.id)?.state === "failed").length;
+  const doneLineOf = (t: Task) => {
+    const failed = failedCount(t);
+    if (!failed) return t.doneLine;
+    const got = (t.files ?? []).length - failed;
+    return got ? `자료 ${got}개를 받고, ${failed}개는 받지 못했어요` : `자료 ${failed}개를 받지 못했어요`;
+  };
+
   const finish = (task: Task) => {
     const rest = tasks.filter((t) => t.id !== task.id);
     const nextId = rest.length ? rest[Math.min(index, rest.length - 1)].id : null;
-    setFinishing({ line: task.doneLine, nextId });
-    setAnnounce(`끝. ${task.doneLine}`);
+    const line = doneLineOf(task);
+    setFinishing({ line, nextId });
+    setAnnounce(`끝. ${line}`);
   };
 
   const act = (task: Task) => {
@@ -309,7 +318,7 @@ export function Home() {
                 </span>
                 <div className="step-text">
                   <p>
-                    {state === "done" ? t.doneLine : state === "now" ? t.doing : t.headline}
+                    {state === "done" ? doneLineOf(t) : state === "now" ? t.doing : t.headline}
                     {state === "now" && pct !== null && <span className="step-pct"> {pct}%</span>}
                   </p>
                   {state === "done" && t.summary && <Summary items={t.summary} />}
