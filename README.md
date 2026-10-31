@@ -61,10 +61,10 @@ node_modules/.bin/electron .
 모든 라이브러리는 `dist/`에 묶이므로 `package.json`에는 개발 의존성만 둡니다. 그래서 앱 묶음에는 `dist/`와 `package.json`만 들어갑니다.
 
 ```bash
-bun run dist:linux   # release/KUrowser-<버전>-arm64.AppImage
-bun run dist:mac     # release/KUrowser-<버전>-arm64.dmg (서명 없음)
+bun run dist:linux   # release/KUrowser-<버전>-<빌드 머신 아키텍처>.AppImage
+bun run dist:mac     # release/KUrowser-<버전>-arm64.dmg (서명 없음, macOS에서만 실행)
 ```
 
-macOS용 dmg는 서명하지 않습니다. 처음 열 때 Finder에서 앱을 Control-클릭하고 [열기]를 누르거나, 터미널에서 `xattr -dr com.apple.quarantine /Applications/KUrowser.app`를 실행해야 합니다.
+`dist:mac`은 macOS에서만 돌아갑니다. fuse를 바꾼 뒤 `codesign`으로 임시 서명을 다시 하기 때문입니다. macOS용 dmg는 개발자 인증서로 서명하지 않습니다. 처음 열 때 Finder에서 앱을 Control-클릭하고 [열기]를 누르거나, 터미널에서 `xattr -dr com.apple.quarantine /Applications/KUrowser.app`를 실행해야 합니다.
 
 패키징한 앱은 쿠키 암호화 fuse를 켭니다. `runAsNode`, `NODE_OPTIONS`, `--inspect`는 끄고, `app.asar`에서만 앱 코드를 읽습니다.
