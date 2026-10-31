@@ -323,6 +323,8 @@ function registerIpc(): void {
   });
   handle("logout", async () => {
     await signOut();
+    engine.signedIn = false;
+    void engine.close();
     lms.loggedOut();
   });
   handle("openAssignment", (id: unknown) => openFromSnapshot("assignment", id));

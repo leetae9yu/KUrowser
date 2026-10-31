@@ -172,22 +172,30 @@ export class LmsService {
     });
   }
 
+  /** The sign-in check navigates the window, so it only ever runs inside a navigating (exclusive) turn. */
+  private async signIn(session: ElectronBrowserSession): Promise<void> {
+    const engine = this.deps.engine;
+    if (engine.signedIn) return;
+    await session.login();
+    engine.signedIn = true;
+    await this.deps.onLogin();
+  }
+
   /**
    * Every job runs in the one shared hidden window. Loads navigate it, so they queue behind other navigating jobs
    * (another load, a site sign-in). Downloads pass `queued = false`: they only read its cookies and start while a
-   * load is still checking lectures.
+   * load is still checking lectures; when the window has not signed in yet, they wait for a sign-in turn first.
    */
-  private withSession<T>(body: (session: ElectronBrowserSession) => Promise<T>, queued = true): Promise<T> {
+  private async withSession<T>(body: (session: ElectronBrowserSession) => Promise<T>, queued = true): Promise<T> {
     const engine = this.deps.engine;
-    const run = async (session: ElectronBrowserSession): Promise<T> => {
-      if (!engine.signedIn) {
-        await session.login();
-        engine.signedIn = true;
-        await this.deps.onLogin();
-      }
-      return body(session);
-    };
-    return queued ? engine.exclusive(run) : engine.shared(run);
+    if (queued) {
+      return engine.exclusive(async (session) => {
+        await this.signIn(session);
+        return body(session);
+      });
+    }
+    if (!engine.signedIn) await engine.exclusive((session) => this.signIn(session));
+    return engine.shared(body);
   }
 
   /** The first load waits on an OS keychain prompt; the window says so instead of a bare spinner. */

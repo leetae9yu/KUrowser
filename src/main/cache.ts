@@ -38,10 +38,14 @@ export class DiskCache<T extends object> {
     const value = this.pending;
     this.pending = null;
     if (!value) return;
-    mkdirSync(dirname(this.path), { recursive: true });
-    const tmp = `${this.path}.tmp`;
-    writeFileSync(tmp, JSON.stringify({ version: this.version, value }), { mode: 0o600 });
-    renameSync(tmp, this.path);
+    try {
+      mkdirSync(dirname(this.path), { recursive: true });
+      const tmp = `${this.path}.tmp`;
+      writeFileSync(tmp, JSON.stringify({ version: this.version, value }), { mode: 0o600 });
+      renameSync(tmp, this.path);
+    } catch {
+      // A full or read-only disk only costs the quick start next time.
+    }
   }
 
   clear(): void {
