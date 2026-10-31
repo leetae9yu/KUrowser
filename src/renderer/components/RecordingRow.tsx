@@ -107,7 +107,10 @@ export function RecordingRow({ r }: { r: Recording }) {
 
   const plan = async () => {
     setState({ step: "planning" });
-    setState({ step: "planned", plan: await api().sttPlan(r.id) });
+    const result = await api()
+      .sttPlan(r.id)
+      .catch(() => ({ ok: false, text: "강의 정보를 읽지 못했어요. 다시 눌러 주세요" }));
+    setState({ step: "planned", plan: result });
   };
 
   const start = (
