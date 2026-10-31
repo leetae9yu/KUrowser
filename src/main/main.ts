@@ -1,11 +1,11 @@
-import { app, BrowserWindow, net, protocol } from "electron";
+import { app, BrowserWindow, ipcMain, net, protocol } from "electron";
 import { join, normalize, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { liveOptions } from "../engine/live.ts";
 import { devConfig } from "./dev.ts";
 import { ElectronBrowserSession } from "./electron-cdp.ts";
-import { isAllowedPage } from "./hosts.ts";
+import { isAiLoginUrl, isAllowedPage } from "./hosts.ts";
 import { makeEngineWindow, schoolSession } from "./school.ts";
 
 let mainWindow: BrowserWindow | null = null;
@@ -53,13 +53,14 @@ function createMainWindow(): BrowserWindow {
 app.on("web-contents-created", (_event, contents) => {
   contents.on("will-attach-webview", (event) => event.preventDefault());
   contents.on("will-navigate", (event, url) => {
-    if (!url.startsWith(`${APP_ORIGIN}/`) && !isAllowedPage(url)) event.preventDefault();
+    if (!url.startsWith(`${APP_ORIGIN}/`) && !isAllowedPage(url) && !isAiLoginUrl(url)) event.preventDefault();
   });
 });
 
 app.whenReady().then(async () => {
   serveRenderer();
   schoolSession();
+  ipcMain.handle("version", () => app.getVersion());
   if (process.env.KUROWSER_PROBE && !app.isPackaged) {
     const { runProbe } = await import("./probe.ts");
     await runProbe(engineSession);

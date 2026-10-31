@@ -20,7 +20,8 @@ export class ElectronDebuggerTransport implements CdpTransport {
   private readonly onMessage = (_event: unknown, method: string, params: Raw): void => {
     if (method === "Page.javascriptDialogOpening") {
       this.lastDialogMessage = String(params?.message ?? "");
-      this.contents.debugger.sendCommand("Page.handleJavaScriptDialog", { accept: true }).catch(() => undefined);
+      const accept = params?.type !== "confirm" || this.acceptConfirms;
+      this.contents.debugger.sendCommand("Page.handleJavaScriptDialog", { accept }).catch(() => undefined);
     }
     this.eventCallback?.({ method, params: params ?? {} });
   };
@@ -29,7 +30,10 @@ export class ElectronDebuggerTransport implements CdpTransport {
     this.eventCallback?.({ method: "CDP.disconnected", params: {} });
   };
 
-  constructor(private readonly contents: WebContents) {
+  constructor(
+    private readonly contents: WebContents,
+    private readonly acceptConfirms = false,
+  ) {
     contents.debugger.attach("1.3");
     contents.debugger.on("message", this.onMessage);
     contents.debugger.on("detach", this.onDetach);
@@ -57,10 +61,9 @@ export class ElectronDebuggerTransport implements CdpTransport {
   }
 
   async close(): Promise<void> {
-    if (this.contents.isDestroyed()) return;
     this.contents.debugger.removeListener("message", this.onMessage);
     this.contents.debugger.removeListener("detach", this.onDetach);
-    if (this.contents.debugger.isAttached()) this.contents.debugger.detach();
+    if (!this.contents.isDestroyed() && this.contents.debugger.isAttached()) this.contents.debugger.detach();
   }
 }
 
@@ -92,7 +95,8 @@ export class ElectronBrowserSession extends CdpBrowserSession {
     try {
       // A window with no document has no renderer yet, and debugger commands would wait forever.
       await this.window.loadURL("about:blank");
-      await this.useTransport(new ElectronDebuggerTransport(this.window.webContents));
+      // Only the dev credential login needs confirm(): the SSO asks there whether to postpone a password change.
+      await this.useTransport(new ElectronDebuggerTransport(this.window.webContents, !!this.config.userId));
     } catch (error) {
       await this.exit();
       throw error;

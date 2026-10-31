@@ -1,7 +1,7 @@
-import { BrowserWindow, session, type Session } from "electron";
+import { app, BrowserWindow, safeStorage, session, type Session } from "electron";
 
 import { CANVAS_ORIGIN, DEFAULT_ENTRY_URL } from "../engine/live.ts";
-import { engineRequestAllowed, isAllowedPage, isSchoolHost, isSchoolUrl } from "./hosts.ts";
+import { engineRequestAllowed, isAiLoginUrl, isAllowedPage, isSchoolHost, isSchoolUrl } from "./hosts.ts";
 
 export const PARTITION = "persist:kurowser";
 const LOGIN_TIMEOUT_MS = 10 * 60 * 1000;
@@ -17,10 +17,10 @@ export function schoolSession(): Session {
     ses.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
     ses.webRequest.onBeforeRequest((details, callback) => {
       const top = details.resourceType === "mainFrame";
-      if (top && !isAllowedPage(details.url)) return callback({ cancel: true });
+      if (top && !isAllowedPage(details.url) && !isAiLoginUrl(details.url)) return callback({ cancel: true });
       const fromEngine = details.webContentsId !== undefined && engineContents.has(details.webContentsId);
-      if (fromEngine && !engineRequestAllowed(details.method, details.url)) {
-        if (!process.env.KUROWSER_LOG_BLOCKED) return callback({ cancel: true });
+      if (fromEngine && !engineRequestAllowed(details.method, details.url, details.resourceType)) {
+        if (app.isPackaged || !process.env.KUROWSER_LOG_BLOCKED) return callback({ cancel: true });
         console.log(`BLOCKED ${details.method} ${new URL(details.url).host}${new URL(details.url).pathname.replace(/\d+/g, "N")}`);
         return callback({ cancel: true });
       }
@@ -47,7 +47,7 @@ export function makeEngineWindow(): BrowserWindow {
     show: false,
     width: 1280,
     height: 900,
-    webPreferences: { ...schoolPreferences(), backgroundThrottling: false },
+    webPreferences: { ...schoolPreferences(), backgroundThrottling: false, autoplayPolicy: "document-user-activation-required" },
   });
   const id = win.webContents.id;
   engineContents.add(id);
@@ -76,10 +76,20 @@ export async function canvasReady(ses: Session = schoolSession()): Promise<boole
 
 /**
  * Canvas and SSO issue session-only cookies, which Chromium drops on quit. Re-saving the school
- * cookies with an expiry keeps the student signed in across restarts; they stay in the app's own
- * partition (encrypted by the OS keychain on macOS) and are never read anywhere else.
+ * cookies with an expiry keeps the student signed in across restarts. The packaged app turns on the
+ * cookie-encryption fuse, so the cookie store is encrypted with the OS keychain key; without a real
+ * keychain (Linux basic_text, or an unpackaged dev run) the cookies stay session-only unless a dev
+ * run opts in with KUROWSER_ALLOW_BASIC_TEXT=1.
  */
+function canPersistCookies(): boolean {
+  const devOptIn = !app.isPackaged && process.env.KUROWSER_ALLOW_BASIC_TEXT === "1";
+  if (!app.isPackaged) return devOptIn;
+  if (!safeStorage.isEncryptionAvailable()) return false;
+  return process.platform !== "linux" || safeStorage.getSelectedStorageBackend() !== "basic_text";
+}
+
 export async function keepLogin(ses: Session = schoolSession()): Promise<void> {
+  if (!canPersistCookies()) return;
   const expirationDate = Date.now() / 1000 + KEEP_LOGIN_DAYS * 86_400;
   for (const cookie of await ses.cookies.get({})) {
     const domain = (cookie.domain ?? "").replace(/^\./, "");

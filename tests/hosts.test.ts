@@ -21,16 +21,25 @@ describe("school pages", () => {
 });
 
 describe("hidden engine window", () => {
+  const doc = "mainFrame";
   test("reads pass, school writes are refused", () => {
-    expect(engineRequestAllowed("GET", "https://mylms.korea.ac.kr/api/v1/courses")).toBe(true);
-    expect(engineRequestAllowed("POST", "https://mylms.korea.ac.kr/api/v1/courses/1/assignments/2/submissions")).toBe(false);
-    expect(engineRequestAllowed("PUT", "https://mylms.korea.ac.kr/api/v1/courses/1/discussion_topics/2/read")).toBe(false);
-    expect(engineRequestAllowed("POST", "https://mylms.korea.ac.kr/learningx/api/v1/courses/1/attendance_items/2/progress")).toBe(false);
-    expect(engineRequestAllowed("POST", "https://www.google-analytics.com/g/collect")).toBe(false);
+    expect(engineRequestAllowed("GET", "https://mylms.korea.ac.kr/api/v1/courses", "xhr")).toBe(true);
+    expect(engineRequestAllowed("POST", "https://mylms.korea.ac.kr/api/v1/courses/1/assignments/2/submissions", "xhr")).toBe(false);
+    expect(engineRequestAllowed("POST", "https://mylms.korea.ac.kr/api/v1/courses/1/assignments/2/submissions", doc)).toBe(false);
+    expect(engineRequestAllowed("PUT", "https://mylms.korea.ac.kr/api/v1/courses/1/discussion_topics/2/read", "xhr")).toBe(false);
+    expect(engineRequestAllowed("POST", "https://mylms.korea.ac.kr/learningx/api/v1/courses/1/attendance_items/2/progress", "xhr")).toBe(false);
+    expect(engineRequestAllowed("POST", "https://www.google-analytics.com/g/collect", "xhr")).toBe(false);
   });
 
-  test("LTI launches and SSO hand-offs still open pages", () => {
-    expect(engineRequestAllowed("POST", "https://mylms.korea.ac.kr/courses/1/external_tools/2")).toBe(true);
-    expect(engineRequestAllowed("POST", "https://sso.korea.ac.kr/anything")).toBe(true);
+  test("only the LTI course-menu launch and SSO hand-offs post as page navigations", () => {
+    expect(engineRequestAllowed("POST", "https://mylms.korea.ac.kr/learningx/lti/lecture_attendance/course_menu", doc)).toBe(true);
+    expect(engineRequestAllowed("POST", "https://mylms.korea.ac.kr/learningx/lti/lecture_attendance/course_menu", "subFrame")).toBe(true);
+    expect(engineRequestAllowed("POST", "https://mylms.korea.ac.kr/learningx/lti/lecture_attendance/course_menu", "xhr")).toBe(false);
+    expect(engineRequestAllowed("POST", "https://mylms.korea.ac.kr/learningx/lti/lecture_attendance/course_menu/progress", doc)).toBe(false);
+    expect(engineRequestAllowed("POST", "https://mylms.korea.ac.kr/api/lti/login/submit", doc)).toBe(false);
+    expect(engineRequestAllowed("POST", "https://mylms.korea.ac.kr/courses/1/external_tools/2", doc)).toBe(false);
+    expect(engineRequestAllowed("POST", "https://sso.korea.ac.kr/anything", doc)).toBe(true);
+    expect(engineRequestAllowed("POST", "https://mylms.korea.ac.kr/login/canvas", doc)).toBe(true);
+    expect(engineRequestAllowed("POST", "https://mylms.korea.ac.kr/loginx", doc)).toBe(false);
   });
 });

@@ -33,16 +33,22 @@ export function isAllowedPage(url: string): boolean {
 
 const MUTATING = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
+const DOCUMENT_TYPES = new Set(["mainFrame", "subFrame"]);
+const LTI_LAUNCH = /^\/learningx\/lti\/[a-z_]+\/course_menu$/;
+const CANVAS_LOGIN = /^\/login(\/|$)/;
+
 /**
- * The hidden engine window only reads. It may still submit the LTI launch forms and SSO hand-offs
- * that opening a school page needs; every other write-shaped request is cancelled.
+ * The hidden engine window only reads. It may still submit, as page navigations, the LearningX
+ * LTI launch form that opens a course tool and the SSO login hand-off; script requests (xhr, fetch)
+ * that write are always cancelled. Observed on the live LMS: the attendance tab posts only
+ * /learningx/lti/lecture_attendance/course_menu.
  */
-export function engineRequestAllowed(method: string, url: string): boolean {
+export function engineRequestAllowed(method: string, url: string, resourceType: string): boolean {
   if (!MUTATING.has(method.toUpperCase())) return true;
+  if (!DOCUMENT_TYPES.has(resourceType)) return false;
   const u = parse(url);
-  if (!u || !isSchoolHost(u.hostname)) return false;
-  const path = u.pathname.toLowerCase();
-  if (path.includes("/external_tools/") || path.includes("/lti/") || path.includes("/login") || path.includes("/sso")) return true;
+  if (!u || u.protocol !== "https:" || !isSchoolHost(u.hostname)) return false;
   if (u.hostname === "sso.korea.ac.kr") return true;
-  return false;
+  if (u.hostname !== "mylms.korea.ac.kr" && u.hostname !== "canvas.korea.ac.kr") return false;
+  return LTI_LAUNCH.test(u.pathname) || CANVAS_LOGIN.test(u.pathname);
 }

@@ -60,6 +60,15 @@
     },
     "dmg": {
       "title": "KUrowser"
+    },
+    "electronFuses": {
+      "runAsNode": false,
+      "enableCookieEncryption": true,
+      "enableNodeOptionsEnvironmentVariable": false,
+      "enableNodeCliInspectArguments": false,
+      "grantFileProtocolExtraPrivileges": false,
+      "onlyLoadAppFromAsar": true,
+      "resetAdHocDarwinSignature": true
     }
   },
   "trustedDependencies": [
