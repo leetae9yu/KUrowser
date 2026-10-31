@@ -2,6 +2,7 @@ import type { Course, Recording, Snapshot } from "../shared/types";
 
 export type { Course, Recording };
 export type CourseId = string;
+export type Theme = "system" | "light" | "dark";
 
 export interface Assignment {
   id: string;
@@ -93,6 +94,9 @@ export function suggestionsFor(data: Data): string[] {
     "안 본 강의 몇 개야",
     "녹화강의 요약해줘",
     "공지 요약해줘",
+    "학교 공지 보여줘",
+    "다음 학사 일정 뭐야",
+    "성적 화면 열어줘",
     data.courses[1] ? `${shortCourseName(data.courses[1].name)} 열어줘` : "과목 전체 보기",
     "과목 전체 보기",
   ].filter((s, i, all) => all.indexOf(s) === i);

@@ -1,10 +1,11 @@
 import { ArrowLeft, Bell, Check, Download, ExternalLink, Play, Sparkles } from "lucide-react";
 import type { Outcome } from "../commands";
 import { courseOf, type Notice } from "../data";
-import { jobFor, useStore } from "../store";
+import { api, jobFor, useStore } from "../store";
 import { CourseList, CourseView } from "./CourseView";
 import { RecordingRow } from "./RecordingRow";
 import { FileRow, LectureRow, NoticeRow } from "./Rows";
+import { MenuButtons, PortalRow, ScheduleRow } from "./SiteRows";
 import { Timeline } from "./Timeline";
 
 export function Summary({ items }: { items: Notice[] }) {
@@ -60,6 +61,18 @@ function useNextActions(outcome: Outcome): Action[] {
       run: () => markRead(unread.map((n) => n.id)),
     });
   }
+  if (outcome.kind === "portal" && outcome.items.length) {
+    const unread = outcome.items.filter((n) => !n.read && !read.has(n.id));
+    out.push({
+      label: unread.length ? "다 읽었어요" : "읽음으로 표시했어요",
+      icon: Check,
+      done: unread.length === 0,
+      run: () => markRead(unread.map((n) => n.id)),
+    });
+  }
+  if (outcome.kind === "schedule") {
+    out.push({ label: "학사 일정 화면 열기", icon: ExternalLink, run: () => void api().openMenu("calendar") });
+  }
   if (outcome.kind === "course") {
     const left = data.files.filter((f) => f.courseId === outcome.course.id && f.available && !downloaded.has(f.id) && !jobFor(jobs, f.id));
     out.push({
@@ -110,6 +123,21 @@ export function ResultCard({ outcome, onRun, onBack }: { outcome: Outcome; onRun
         )}
         {outcome.kind === "course" && <CourseView course={outcome.course} />}
         {outcome.kind === "courses" && <CourseList onOpen={onRun} />}
+        {outcome.kind === "portal" && (
+          <ul className="list">
+            {outcome.items.map((n) => (
+              <PortalRow key={n.id} n={n} />
+            ))}
+          </ul>
+        )}
+        {outcome.kind === "schedule" && (
+          <ul className="list">
+            {outcome.items.map((e) => (
+              <ScheduleRow key={`${e.start}-${e.event}`} e={e} />
+            ))}
+          </ul>
+        )}
+        {outcome.kind === "menus" && <MenuButtons items={outcome.items} />}
         {outcome.kind === "recordings" && (
           <ul className="list">
             {outcome.items.map((r) => (

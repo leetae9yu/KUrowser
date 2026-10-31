@@ -16,6 +16,8 @@ import { isAiLoginUrl, isAllowedPage, isDownloadHost } from "./hosts.ts";
 import { type LmsCache, LmsService } from "./lms.ts";
 import { ReminderScheduler } from "./reminders.ts";
 import { SchoolPane } from "./pane.ts";
+import { siteGet } from "./site-fetch.ts";
+import { type SitesCache, SitesService } from "./sites.ts";
 import { keepLogin, makeEngineWindow, schoolSession, signIn, signOut } from "./school.ts";
 import { COMMAND_PROMPT, SUMMARY_LECTURE_PROMPT, SUMMARY_PROMPT, commandUserPrompt, parseCommand, parseSummaries, summaryUserPrompt } from "./sentence.ts";
 import { CHAT_PROMPT, chatUserPrompt, CLARIFY_PROMPT, commandOf, jevRequest, pageUrl, parseJev, routeUserPrompt } from "./route.ts";
@@ -56,6 +58,12 @@ const pane = new SchoolPane(
   (state) => send("pane", state),
 );
 let aiAttempted = false;
+const sitesCache = new DiskCache<SitesCache>(join(app.getPath("userData"), "sites-cache.json"), 1);
+const sites = new SitesService({
+  get: siteGet,
+  cache: sitesCache,
+  readNotices: () => new Set(store.get().readNotices),
+});
 const lms = new LmsService({
   engine,
   cache: lmsCache,
@@ -312,6 +320,16 @@ function registerIpc(): void {
     typeof text === "string" && text.trim() ? chat(text.trim().slice(0, 300)) : { kind: "error", text: "" },
   );
   handle("snapshot", (): Snapshot => lms.snapshot());
+  handle("sites", () => sites.snapshot());
+  handle("refreshSites", () => sites.refresh());
+  handle("openMenu", (id: unknown) => {
+    const menu = sites.snapshot().menus.find((m) => m.id === id);
+    return !!menu && !!pane.open(menu.url);
+  });
+  handle("openPortalNotice", (id: unknown) => {
+    const url = typeof id === "string" ? sites.noticeUrl(id) : null;
+    if (url) pane.open(url);
+  });
   handle("refresh", () => lms.refresh());
   handle("login", async () => {
     const ok = await signIn(pane);
@@ -326,6 +344,7 @@ function registerIpc(): void {
     engine.signedIn = false;
     void engine.close();
     lms.loggedOut();
+    sites.clear();
   });
   handle("openAssignment", (id: unknown) => openFromSnapshot("assignment", id));
   handle("openLecture", (id: unknown) => openFromSnapshot("lecture", id));
@@ -335,6 +354,7 @@ function registerIpc(): void {
       s.readNotices = [...new Set([...s.readNotices, ...strings(ids)])];
     });
     lms.emit();
+    sites.emit();
   });
   handle("summarize", async (ids: unknown) => {
     const wanted = new Set(strings(ids));
@@ -422,6 +442,8 @@ function createMainWindow(): BrowserWindow {
   win.on("focus", () => {
     const fetchedAt = lms.snapshot().fetchedAt;
     if (fetchedAt && Date.now() - Date.parse(fetchedAt) > STALE_MS) void lms.refresh();
+    const sitesAt = sites.snapshot().portal.fetchedAt;
+    if (!sitesAt || Date.now() - Date.parse(sitesAt) > STALE_MS) void sites.refresh();
   });
   void win.loadURL(`${APP_ORIGIN}/index.html`);
   return win;
@@ -450,6 +472,7 @@ app.whenReady().then(async () => {
     return;
   }
   registerIpc();
+  sites.subscribe((s) => send("sites", s));
   let loadedRecorded = false;
   lms.subscribe((snapshot) => {
     send("snapshot", snapshot);
@@ -481,13 +504,17 @@ async function startLoading(): Promise<void> {
     if (lms.snapshot().phase === "ready" && !aiAttempted && !gateway.connected) void connectAi();
   });
   void lms.refresh();
+  void sites.refresh();
 }
 
 app.on("activate", () => {
   if (!mainWindow || mainWindow.isDestroyed()) mainWindow = createMainWindow();
 });
 
-app.on("before-quit", () => lmsCache.flush());
+app.on("before-quit", () => {
+  lmsCache.flush();
+  sitesCache.flush();
+});
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
