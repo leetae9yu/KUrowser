@@ -3,6 +3,7 @@ import type { Outcome } from "../commands";
 import { courseOf, type Notice } from "../data";
 import { jobFor, useStore } from "../store";
 import { CourseList, CourseView } from "./CourseView";
+import { RecordingRow } from "./RecordingRow";
 import { FileRow, LectureRow, NoticeRow } from "./Rows";
 import { Timeline } from "./Timeline";
 
@@ -82,8 +83,8 @@ export function ResultCard({ outcome, onRun, onBack }: { outcome: Outcome; onRun
     actions.push({ label: "할 일로 돌아가기", icon: ArrowLeft, run: onBack });
   }
   return (
-    <div className="result" aria-live="polite">
-      <h1 className="hero-title">{outcome.title}</h1>
+    <div className="result">
+      <h2 className="result-title">{outcome.title}</h2>
       <div className="result-body">
         {outcome.kind === "deadlines" && <Timeline assignments={outcome.assignments} lectures={outcome.lectures} />}
         {outcome.kind === "lectures" && (
@@ -109,6 +110,13 @@ export function ResultCard({ outcome, onRun, onBack }: { outcome: Outcome; onRun
         )}
         {outcome.kind === "course" && <CourseView course={outcome.course} />}
         {outcome.kind === "courses" && <CourseList onOpen={onRun} />}
+        {outcome.kind === "recordings" && (
+          <ul className="list">
+            {outcome.items.map((r) => (
+              <RecordingRow key={r.id} r={r} />
+            ))}
+          </ul>
+        )}
       </div>
       {actions.length > 0 && (
         <div className="stage-actions">

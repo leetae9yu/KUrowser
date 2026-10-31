@@ -94,6 +94,13 @@ export interface Snapshot {
   fetchedAt: string | null;
 }
 
+export interface PaneState {
+  open: boolean;
+  wide: boolean;
+  title: string;
+  canGoBack: boolean;
+}
+
 export interface Settings {
   notifyDue: boolean;
   downloadDir: string;
@@ -145,6 +152,12 @@ export interface KurowserApi {
   setNotifyDue(on: boolean): Promise<Settings>;
   connectAi(): Promise<{ ok: boolean; text: string }>;
   onAiStatus(fn: (text: string) => void): () => void;
+  onSettings(fn: (s: Settings) => void): () => void;
+  paneState(): Promise<PaneState>;
+  onPane(fn: (s: PaneState) => void): () => void;
+  paneBack(): Promise<void>;
+  paneClose(): Promise<void>;
+  paneWiden(): Promise<void>;
   interpret(text: string): Promise<{ via: "ai" | "rules"; command: ReadCommand } | null>;
   chat(text: string): Promise<ChatReply>;
   sttPlan(id: string): Promise<SttPlan>;
