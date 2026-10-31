@@ -1,5 +1,5 @@
 import type { ReadCommand } from "../shared/types";
-import type { Assignment, Course, Data, FileItem, Lecture, Notice, Recording } from "./data";
+import { shortCourseName, type Assignment, type Course, type Data, type FileItem, type Lecture, type Notice, type Recording } from "./data";
 import { addDays, today0, weekStart } from "./format";
 import type { Route } from "./router";
 import type { Theme } from "./store";
@@ -31,7 +31,8 @@ export type Parsed =
 const has = (s: string, ...words: string[]) => words.some((w) => s.includes(w));
 
 function findCourse(s: string, data: Data): Course | undefined {
-  return data.courses.find((c) => c.aliases.some((a) => a && s.includes(a)));
+  const bare = (name: string) => shortCourseName(name).toLowerCase().replace(/\s+/g, "");
+  return data.courses.find((c) => c.aliases.some((a) => a && s.includes(a)) || (bare(c.name).length > 1 && s.includes(bare(c.name))));
 }
 
 function rangeOf(s: string): Extract<ReadCommand, { command: "deadlines" }>["range"] {
