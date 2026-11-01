@@ -125,7 +125,7 @@ export function NoticeRow({ n, showCourse = true }: { n: Notice; showCourse?: bo
   );
 }
 
-export function FileRow({ f, showCourse = true }: { f: FileItem; showCourse?: boolean }) {
+export function FileRow({ f, showCourse = true, showFolder = true }: { f: FileItem; showCourse?: boolean; showFolder?: boolean }) {
   const { jobs, download } = useStore();
   const { downloaded } = useStore();
   const job = jobFor(jobs, f.id);
@@ -137,7 +137,7 @@ export function FileRow({ f, showCourse = true }: { f: FileItem; showCourse?: bo
         <span className="row-meta">
           {showCourse && <CourseTag id={f.courseId} />}
           {f.size > 0 && <span>{sizeLabel(f.size)}</span>}
-          {f.folder && <span>{f.folder}</span>}
+          {showFolder && f.folder && <span>{f.folder}</span>}
         </span>
       </div>
       <button

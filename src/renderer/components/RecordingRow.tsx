@@ -92,7 +92,7 @@ function Panel({ state, onStart, onClose }: { state: Step; onStart: () => void; 
   }
 }
 
-export function RecordingRow({ r }: { r: Recording }) {
+export function RecordingRow({ r, showCourse = true, showWeek = true }: { r: Recording; showCourse?: boolean; showWeek?: boolean }) {
   const [state, setState] = useState<Step>({ step: "idle" });
   const minutes = Math.max(1, Math.round(r.seconds / 60));
   const busy = state.step === "planning" || state.step === "planned" || state.step === "running";
@@ -131,11 +131,11 @@ export function RecordingRow({ r }: { r: Recording }) {
     <li className="row row-rec">
       <div className="row-main">
         <span className="row-title">
-          {r.week ? `${r.week}주차 ` : ""}
+          {showWeek && r.week ? `${r.week}주차 ` : ""}
           {r.title}
         </span>
         <span className="row-meta">
-          <CourseTag id={r.courseId} />
+          {showCourse && <CourseTag id={r.courseId} />}
           <span>{minutes}분</span>
           {r.watched && <span className="rec-seen">본 강의</span>}
         </span>

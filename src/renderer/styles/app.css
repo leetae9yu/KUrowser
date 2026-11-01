@@ -390,6 +390,95 @@ button {
   color: var(--text-2);
 }
 
+/* ---------- per-course groups (materials, recorded lectures) ---------- */
+.result-body .stage-actions.group-top {
+  padding: var(--space-1) 0 var(--space-4);
+}
+
+.groups {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.group {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+
+.group.is-open {
+  border-color: var(--border-strong);
+}
+
+.group-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  min-height: var(--row-min-h);
+  padding: var(--space-3) var(--space-4);
+  border: 0;
+  border-radius: inherit;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.group-head:hover {
+  background: var(--bg-hover);
+}
+
+.group-head:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+.group-head > svg {
+  flex: none;
+  color: var(--text-3);
+}
+
+.group-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.group-line {
+  font-size: var(--text-sm);
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.group-bar {
+  display: block;
+  margin: var(--space-1) 0 0;
+}
+
+.group-bar .bar-fill {
+  display: block;
+}
+
+.group-body {
+  padding: 0 var(--space-4) var(--space-4);
+}
+
+.group-week:first-child .sub-title {
+  margin-top: var(--space-2);
+}
+
+.group-all {
+  margin-top: var(--space-3);
+}
+
 /* ---------- command input (the composer; layout in chat.css) ---------- */
 .command-form {
   display: flex;

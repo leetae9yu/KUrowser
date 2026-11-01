@@ -7,10 +7,10 @@ export type Outcome =
   | { kind: "deadlines"; title: string; assignments: Assignment[]; lectures: Lecture[] }
   | { kind: "lectures"; title: string; items: Lecture[] }
   | { kind: "notices"; title: string; items: Notice[] }
-  | { kind: "download"; title: string; files: FileItem[]; start: boolean }
+  | { kind: "download"; title: string; files: FileItem[]; start: boolean; courseId?: string; onlyNew?: boolean }
   | { kind: "course"; title: string; course: Course }
   | { kind: "courses"; title: string }
-  | { kind: "recordings"; title: string; items: Recording[] }
+  | { kind: "recordings"; title: string; items: Recording[]; courseId?: string }
   | { kind: "navigate"; title: string; route: Route }
   | { kind: "theme"; title: string; theme: Theme }
   | { kind: "portal"; title: string; items: PortalNotice[] }
@@ -189,7 +189,7 @@ export function recordingsOutcome(data: Data, courseName?: string): Outcome {
   const course = courseName ? data.courses.find((c) => c.name === courseName) : undefined;
   const scope = course ? `${course.name} ` : "";
   const items = data.recordings.filter((r) => !course || r.courseId === course.id).sort((a, b) => (b.week ?? -1) - (a.week ?? -1));
-  return { kind: "recordings", title: items.length ? `${scope}녹화 강의 ${items.length}개, 최근 주차부터예요` : `${scope}녹화 강의가 없어요`, items };
+  return { kind: "recordings", title: items.length ? `${scope}녹화 강의 ${items.length}개예요` : `${scope}녹화 강의가 없어요`, items, courseId: course?.id };
 }
 
 export function outcomeFor(command: ReadCommand, data: Data, snap: Snapshot, start = false): Outcome {
@@ -206,7 +206,7 @@ export function outcomeFor(command: ReadCommand, data: Data, snap: Snapshot, sta
           ? `${scope}자료 ${list.length}개를 받기 시작했어요`
           : `${scope}아직 안 받은 자료 ${list.length}개`
         : `${scope}새로 받을 자료가 없어요`;
-      return { kind: "download", title, files: list, start };
+      return { kind: "download", title, files: list, start, courseId: course?.id, onlyNew: command.onlyNew };
     }
     case "deadlines": {
       const range = rangeDates(command.range);
