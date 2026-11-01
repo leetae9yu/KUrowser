@@ -83,7 +83,7 @@ export function CourseList({ onOpen }: { onOpen: (name: string) => void }) {
                 {shown.length ? shown.map(([label, n]) => <span key={label}>{label} {n}</span>) : <span>새 소식 없음</span>}
               </span>
             </div>
-            <button type="button" className="btn btn-row" aria-label={`${c.name} 열기`} title="열기" onClick={() => onOpen(`${c.name} 열어줘`)}>
+            <button type="button" className="btn btn-row" aria-label={`${c.name} 열기`} title="열기" onClick={() => onOpen(c.name)}>
               <ChevronRight size={16} aria-hidden="true" />
               <span className="btn-label">열기</span>
             </button>

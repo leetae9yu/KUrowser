@@ -86,21 +86,3 @@ export function shortCourseName(name: string): string {
   return short || name;
 }
 
-export function suggestionsFor(data: Data): string[] {
-  const first = data.courses[0] && shortCourseName(data.courses[0].name);
-  return [
-    "이번 주 마감 뭐 있어",
-    first ? `${first} 자료 다 받아줘` : "새 자료 다 받아줘",
-    "안 본 강의 몇 개야",
-    "녹화강의 요약해줘",
-    "공지 요약해줘",
-    "학교 공지 보여줘",
-    "다음 학사 일정 뭐야",
-    "중앙도서관 빈자리 있어?",
-    "빌린 책 반납일 알려줘",
-    "이번 학기 성적 알려줘",
-    "내 시간표 보여줘",
-    data.courses[1] ? `${shortCourseName(data.courses[1].name)} 열어줘` : "과목 전체 보기",
-    "과목 전체 보기",
-  ].filter((s, i, all) => all.indexOf(s) === i);
-}

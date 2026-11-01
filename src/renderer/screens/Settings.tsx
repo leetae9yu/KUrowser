@@ -1,6 +1,17 @@
 import { FolderOpen, LogIn, LogOut, Monitor, Moon, Sparkles, Sun } from "lucide-react";
 import { useEffect, useState } from "react";
+import type { Settings as AppSettings } from "../../shared/types";
 import { api, useStore, type Theme } from "../store";
+
+const clock = (iso: string) => new Date(iso).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" });
+
+/** The AI errors since the app started: how many, the last one (status, model, time), and a Jev pause if one runs. */
+function aiErrorLine({ count, last, pausedUntil }: AppSettings["aiErrors"]): string {
+  if (!last) return "";
+  const status = typeof last.status === "number" ? `HTTP ${last.status}` : last.status === "timeout" ? "시간 초과" : "연결 실패";
+  const pause = pausedUntil && Date.parse(pausedUntil) > Date.now() ? ` · ${clock(pausedUntil)}까지 Jev 대신 간단한 분류를 써요` : "";
+  return `AI 오류 ${count}번 · 마지막 ${clock(last.at)} ${status} (${last.model || "AI"})${pause}`;
+}
 
 const themes: { value: Theme; label: string; icon: typeof Sun }[] = [
   { value: "system", label: "시스템", icon: Monitor },
@@ -82,8 +93,9 @@ export function Settings() {
               {aiStatus ||
                 (settings?.aiConnected
                   ? "한 문장 명령과 공지 한 줄 요약에 써요. 누를 때만 AI를 불러요."
-                  : "연결하면 아무 문장이나 알아듣고 공지를 한 줄로 줄여 드려요. 연결 전에는 정해 둔 문장만 알아들어요.")}
+                  : "연결하면 아무 문장이나 알아듣고 공지를 한 줄로 줄여 드려요. 연결 전에는 버튼으로 골라 주세요.")}
             </p>
+            {settings?.aiErrors.last && <p className="setting-hint">{aiErrorLine(settings.aiErrors)}</p>}
           </div>
           {!settings?.aiConnected && (
             <button type="button" className="btn btn-primary" disabled={connecting} onClick={() => void connectAi()}>

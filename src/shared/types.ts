@@ -227,6 +227,10 @@ export interface PaneState {
 /** A line focus mode adds to the chat: the next step on the school page, or a finished job. */
 export type FocusEvent = { kind: "hint"; text: string } | { kind: "done"; text: string };
 
+/** A Gateway call that did not answer 200: its HTTP status, "timeout", or "network" when no response came back. */
+export type FailStatus = number | "timeout" | "network";
+export type AiFailure = { at: string; status: FailStatus; model: string; detail: string };
+
 export interface Settings {
   notifyDue: boolean;
   downloadDir: string;
@@ -234,6 +238,8 @@ export interface Settings {
   aiLabel: string;
   /** The AI account's credits left this month; null before the first check or when the Gateway does not answer. */
   aiCredits: number | null;
+  /** Failed AI calls since the app started, the last one, and when a Jev pause after repeated server failures ends. */
+  aiErrors: { count: number; last: AiFailure | null; pausedUntil: string | null };
   signedInBefore: boolean;
 }
 
@@ -265,8 +271,8 @@ export type ChatIntent =
   | { kind: "settings" };
 
 /**
- * What the main process made of a typed sentence. `fallback` means the AI could not be asked (not connected, too
- * few credits, a failed call), so the chat reads the sentence with its local word rules instead.
+ * What the main process made of a typed sentence. `fallback` means the AI could not read it (not connected, too
+ * few credits, Jev and the chat model both failed), so the chat offers the common requests as buttons instead.
  */
 /**
  * Where a request to open a school page stands in the three-step tree (LMS course or portal, course or portal

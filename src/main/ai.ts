@@ -3,6 +3,7 @@ import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from "nod
 import { hostname } from "node:os";
 import { join } from "node:path";
 
+import { GatewayError } from "./jev-guard.ts";
 import { schoolSession } from "./school.ts";
 
 export const SITE = "https://llm.korea.ac.kr";
@@ -12,6 +13,9 @@ const LOGIN_TIMEOUT_MS = 10 * 60 * 1000;
 // Right after the LMS sign-in the portal session is still valid, so the AI site signs in by itself within seconds.
 const SILENT_LOGIN_MS = 25 * 1000;
 // gpt-5.6-luna is the only cheap model measured on the bench pilot (0.21 credit a call plus the 5-credit filter fee).
+const POST_TIMEOUT_MS = 60_000;
+/** A Jev classification answers in a few seconds; one that hangs is treated like a server failure. */
+const JEV_TIMEOUT_MS = 20_000;
 const PREFERRED_MODELS = [/^gpt-5\.6-luna$/, /flash-lite/i, /haiku/i, /mini/i, /flash/i];
 
 type Status = (text: string) => void;
@@ -213,6 +217,11 @@ export class GatewayClient {
     return this.key !== null;
   }
 
+  /** The chat model in use, for error records; empty before the first call picks it. */
+  get chatModelName(): string {
+    return this.model ?? "";
+  }
+
   get label(): string {
     return this.key ? `연결됨 (${mask(this.key)})` : "";
   }
@@ -256,14 +265,21 @@ export class GatewayClient {
     rmSync(keyFile(), { force: true });
   }
 
-  private async post(path: string, payload: unknown): Promise<unknown> {
+  private async post(path: string, payload: unknown, timeoutMs = POST_TIMEOUT_MS): Promise<unknown> {
     if (!this.key) throw new Error("AI가 연결되어 있지 않아요");
-    const res = await net.fetch(`${GATEWAY}${path}`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${this.key}`, "content-type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    if (res.status !== 200) throw new Error(`AI 호출이 실패했어요 (HTTP ${res.status})`);
+    let res: Response;
+    try {
+      res = await net.fetch(`${GATEWAY}${path}`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${this.key}`, "content-type": "application/json" },
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+    } catch (error) {
+      const timedOut = error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
+      throw new GatewayError(timedOut ? "timeout" : "network", error instanceof Error ? error.message : "");
+    }
+    if (res.status !== 200) throw new GatewayError(res.status, (await res.text().catch(() => "")).slice(0, 200));
     return res.json();
   }
 
@@ -294,7 +310,7 @@ export class GatewayClient {
 
   /** A Jev decisions call (input tokens only are billed). */
   decide(request: Record<string, unknown>): Promise<unknown> {
-    return this.post("/decisions/", request);
+    return this.post("/decisions/", request, JEV_TIMEOUT_MS);
   }
 
   /** Remaining credits of the key's account (free to call); null when the Gateway does not answer. */
