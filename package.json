@@ -1,7 +1,7 @@
 {
   "name": "kurowser",
   "productName": "KUrowser",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "private": true,
   "description": "고려대 LMS 할 일을 버튼 한두 번으로 끝내는 앱",
   "author": "leetae9yu",
