@@ -21,7 +21,7 @@ import { amsPost, siteGet } from "./site-fetch.ts";
 import { type SitesCache, SitesService } from "./sites.ts";
 import { keepLogin, makeEngineWindow, schoolSession, signIn, signOut } from "./school.ts";
 import { COMMAND_PROMPT, SUMMARY_LECTURE_PROMPT, SUMMARY_PROMPT, commandUserPrompt, parseCommand, parseSummaries, summaryUserPrompt } from "./sentence.ts";
-import { classify, JEV_MODEL, JevGuard } from "./jev-guard.ts";
+import { classify, GatewayError, JEV_MODEL, JevGuard } from "./jev-guard.ts";
 import { CHAT_PROMPT, chatUserPrompt, CLARIFY_PROMPT, intentOf, jevRequest, pageUrl, parseJev, parseLlmRoute, ROUTE_PROMPT, routeUserPrompt, unsure } from "./route.ts";
 import { pick, PORTAL_GROUPS, portalScreens, readStep, stepOptions, stepPrompt, stepRequest, TREE_CONFIDENCE } from "./tree.ts";
 import { StateStore } from "./state.ts";
@@ -229,6 +229,7 @@ async function chat(text: string): Promise<ChatReply> {
     if (route.kind === "chat") return { kind: "answer", text: await gateway.complete(CHAT_PROMPT, chatUserPrompt(text, chatContext()), 300) };
     return await clarify();
   } catch (error) {
+    if (error instanceof GatewayError) jevGuard.record(gateway.chatModelName, error);
     return { kind: "error", text: error instanceof Error ? error.message : "AI에 묻지 못했어요" };
   } finally {
     void refreshCredits();

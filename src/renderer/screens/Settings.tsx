@@ -9,7 +9,7 @@ const clock = (iso: string) => new Date(iso).toLocaleTimeString("ko-KR", { hour:
 function aiErrorLine({ count, last, pausedUntil }: AppSettings["aiErrors"]): string {
   if (!last) return "";
   const status = typeof last.status === "number" ? `HTTP ${last.status}` : last.status === "timeout" ? "시간 초과" : "연결 실패";
-  const pause = pausedUntil ? ` · ${clock(pausedUntil)}까지 Jev 대신 간단한 분류를 써요` : "";
+  const pause = pausedUntil && Date.parse(pausedUntil) > Date.now() ? ` · ${clock(pausedUntil)}까지 Jev 대신 간단한 분류를 써요` : "";
   return `AI 오류 ${count}번 · 마지막 ${clock(last.at)} ${status} (${last.model || "AI"})${pause}`;
 }
 

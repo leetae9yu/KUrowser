@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
 
 import { classify, GatewayError, JEV_PAUSE_MS, JevGuard } from "../src/main/jev-guard.ts";
-import { FALLBACK_CHIPS, homeChips } from "../src/renderer/commands.ts";
+import type { Course } from "../src/renderer/data.ts";
+import { courseCommand, FALLBACK_CHIPS, homeChips, outcomeFor } from "../src/renderer/commands.ts";
 
 function setup() {
   let now = Date.parse("2026-11-01T09:30:00Z");
@@ -113,5 +114,14 @@ describe("chips", () => {
     expect(chips.find((c) => c.label === "새 자료 다 받아줘")?.parsed).toEqual({ kind: "read", command: { command: "files", onlyNew: true }, start: true });
     expect(chips.find((c) => c.label === "중앙도서관 빈자리 있어?")?.parsed).toEqual({ kind: "seats", library: "중앙도서관" });
     expect(chips.at(-1)?.parsed).toEqual({ kind: "read", command: { command: "courses" } });
+  });
+
+  test("a course picked from the course list opens that course", () => {
+    const course: Course = { id: "c1", name: "형사소송법", prof: "", hue: 1, aliases: [] };
+    const data = { ...noData, courses: [course], courseById: { c1: course } };
+    const parsed = courseCommand(course.name);
+    if (parsed.kind !== "read") throw new Error("course command is a read");
+    const snap = { watched: new Set<string>(), read: new Set<string>(), downloaded: new Set<string>() };
+    expect(outcomeFor(parsed.command, data, snap)).toMatchObject({ kind: "course", course: { id: "c1" } });
   });
 });

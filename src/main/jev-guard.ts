@@ -69,7 +69,7 @@ export class JevGuard {
 
 /**
  * Classifies a sentence with Jev, or with the chat model when Jev failed on the server side or is paused. A request
- * Jev refused (4xx) or an answer that does not parse gives null, and the chat falls back to its word rules.
+ * Jev refused (4xx) or an answer that does not parse gives null, and the chat offers its common requests as buttons.
  */
 export async function classify<R>(
   guard: JevGuard,

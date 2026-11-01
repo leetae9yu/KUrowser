@@ -1,5 +1,5 @@
 import type { Loan, PortalNotice, ReadCommand, ScheduleEntry, SchoolMenu, SeatRoom, SitesSnapshot } from "../shared/types";
-import { shortCourseName, type Theme, type Assignment, type Course, type Data, type FileItem, type Lecture, type Notice, type Recording } from "./data";
+import { shortCourseName, type Assignment, type Course, type Data, type FileItem, type Lecture, type Notice, type Recording } from "./data";
 import { addDays, today0, weekStart } from "./format";
 import type { Route } from "./router";
 
@@ -12,7 +12,6 @@ export type Outcome =
   | { kind: "courses"; title: string }
   | { kind: "recordings"; title: string; items: Recording[]; courseId?: string }
   | { kind: "navigate"; title: string; route: Route }
-  | { kind: "theme"; title: string; theme: Theme }
   | { kind: "portal"; title: string; items: PortalNotice[] }
   | { kind: "schedule"; title: string; items: ScheduleEntry[] }
   | { kind: "menus"; title: string; items: SchoolMenu[] }

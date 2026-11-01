@@ -131,7 +131,7 @@ function Bubble({ message, onChip, onPick }: { message: Message; onChip: (chip: 
     return (
       <li className="msg msg-app msg-card">
         <div className="card">
-          <ResultCard outcome={message.outcome} onRun={(course) => onChip({ label: course, parsed: courseCommand(course) })} />
+          <ResultCard outcome={message.outcome} onRun={(course) => onChip({ label: `${course} 열어줘`, parsed: courseCommand(course) })} />
         </div>
       </li>
     );
