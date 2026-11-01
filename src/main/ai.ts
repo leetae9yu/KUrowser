@@ -39,19 +39,51 @@ async function assertKeyStoreReady(): Promise<void> {
   }
 }
 
+/**
+ * Encrypts with the OS keychain key. The async API threw on the Mac mini's signed build after a key was issued
+ * ("Error while encrypting the text provided to safeStorage.encryptStringAsync"), so the synchronous API, which
+ * uses the same keychain item, is the fallback.
+ */
+async function encrypt(text: string): Promise<Buffer> {
+  try {
+    return await safeStorage.encryptStringAsync(text);
+  } catch (error) {
+    if (!safeStorage.isEncryptionAvailable()) throw error;
+    return safeStorage.encryptString(text);
+  }
+}
+
+async function decrypt(data: Buffer): Promise<string> {
+  try {
+    return (await safeStorage.decryptStringAsync(data)).result;
+  } catch (error) {
+    if (!safeStorage.isEncryptionAvailable()) throw error;
+    return safeStorage.decryptString(data);
+  }
+}
+
 async function saveKey(key: string): Promise<void> {
   const tmp = `${keyFile()}.tmp`;
-  writeFileSync(tmp, await safeStorage.encryptStringAsync(key), { mode: 0o600 });
+  writeFileSync(tmp, await encrypt(key), { mode: 0o600 });
   renameSync(tmp, keyFile());
 }
 
 async function loadKey(): Promise<string | null> {
   if (!existsSync(keyFile())) return null;
   try {
-    return (await safeStorage.decryptStringAsync(readFileSync(keyFile()))).result || null;
+    return (await decrypt(readFileSync(keyFile()))) || null;
   } catch {
     rmSync(keyFile(), { force: true });
     return null;
+  }
+}
+
+/** A key the app could not store would be lost and leave an unused key on the AI site, so storing is tried first. */
+async function assertCanStoreKey(): Promise<void> {
+  try {
+    await encrypt("kurowser-key-store-check");
+  } catch {
+    throw new Error("이 컴퓨터 키체인에 AI 키를 저장할 수 없어서 키를 받지 않았어요");
   }
 }
 
@@ -199,6 +231,7 @@ export class GatewayClient {
         }
         if (!v.rejected) throw new Error(`지금은 키를 확인할 수 없어요 (HTTP ${v.status})`);
       }
+      await assertCanStoreKey();
       const ses = schoolSession();
       const key = await issueKey(ses, this.hidden, opener, status);
       await saveKey(key);
