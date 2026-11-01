@@ -383,6 +383,14 @@
   border-radius: var(--radius-xl);
 }
 
+.composer-note {
+  margin: var(--space-2) 0 0;
+  font-size: var(--text-xs);
+  color: var(--text-3);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
 .command-tail {
   display: flex;
   align-items: center;

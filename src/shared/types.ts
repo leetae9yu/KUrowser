@@ -221,6 +221,8 @@ export interface Settings {
   downloadDir: string;
   aiConnected: boolean;
   aiLabel: string;
+  /** The AI account's credits left this month; null before the first check or when the Gateway does not answer. */
+  aiCredits: number | null;
   signedInBefore: boolean;
 }
 
@@ -238,9 +240,26 @@ export type ReadCommand =
   | { command: "courses" }
   | { command: "unknown" };
 
-/** What the main process made of a sentence the local rules could not place. */
+/** A request the chat runs the same way as a chip: an LMS read, a school-site card, or a page of the app. */
+export type ChatIntent =
+  | { kind: "read"; command: ReadCommand }
+  | { kind: "recordings"; course?: string }
+  | { kind: "portal" }
+  | { kind: "schedule" }
+  | { kind: "loans" }
+  | { kind: "seats"; library?: string }
+  | { kind: "ams"; topic: "grades" | "timetable" | "credits" }
+  | { kind: "menu"; id: string }
+  | { kind: "menus" }
+  | { kind: "settings" };
+
+/**
+ * What the main process made of a typed sentence. `fallback` means the AI could not be asked (not connected, too
+ * few credits, a failed call), so the chat reads the sentence with its local word rules instead.
+ */
 export type ChatReply =
-  | { kind: "command"; command: ReadCommand }
+  | { kind: "intent"; intent: ChatIntent }
+  | { kind: "fallback"; reason: "offline" | "credits" | "failed" }
   | { kind: "opened"; text: string }
   | { kind: "answer"; text: string }
   | { kind: "clarify"; text: string }

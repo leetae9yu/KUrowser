@@ -21,7 +21,7 @@ import { amsPost, siteGet } from "./site-fetch.ts";
 import { type SitesCache, SitesService } from "./sites.ts";
 import { keepLogin, makeEngineWindow, schoolSession, signIn, signOut } from "./school.ts";
 import { COMMAND_PROMPT, SUMMARY_LECTURE_PROMPT, SUMMARY_PROMPT, commandUserPrompt, parseCommand, parseSummaries, summaryUserPrompt } from "./sentence.ts";
-import { CHAT_PROMPT, chatUserPrompt, CLARIFY_PROMPT, commandOf, jevRequest, pageUrl, parseJev, routeUserPrompt } from "./route.ts";
+import { CHAT_PROMPT, chatUserPrompt, CLARIFY_PROMPT, intentOf, jevRequest, pageUrl, parseJev, routeUserPrompt, unsure } from "./route.ts";
 import { StateStore } from "./state.ts";
 import { captionText, estimateCredits, extractAudio, fetchCaption, resolveMedia, STT_MODEL, STT_SPEED, toSrt } from "./stt.ts";
 
@@ -31,6 +31,11 @@ const RENDERER_DIR = join(DIST_DIR, "renderer");
 const STALE_MS = 10 * 60 * 1000;
 /** Below this Jev confidence the app asks back in one sentence instead of acting. */
 const ROUTE_CONFIDENCE = 0.6;
+/** A typed sentence costs at most two calls (Jev, then a question back), each with the 5-credit filter fee. */
+const CHAT_MIN_CREDITS = 11;
+const CREDITS_FRESH_MS = 60_000;
+/** The AI account's credits left, read again (free) when older than a minute or after a paid call. */
+const credits = { left: null as number | null, at: 0 };
 /** Longer than a normal keychain read; past this the OS is most likely showing an allow prompt. */
 const KEYCHAIN_HINT_MS = 2500;
 
@@ -103,6 +108,7 @@ function settings(): Settings {
     downloadDir: downloadDir(),
     aiConnected: gateway.connected,
     aiLabel: gateway.label,
+    aiCredits: gateway.connected ? credits.left : null,
     signedInBefore: store.get().signedInBefore,
   };
 }
@@ -134,6 +140,7 @@ async function connectAi(): Promise<{ ok: boolean; text: string }> {
     return { ok: false, text: error instanceof Error ? error.message : "연결하지 못했어요" };
   } finally {
     send("settings", settings());
+    if (gateway.connected) void refreshCredits();
   }
 }
 
@@ -154,42 +161,58 @@ function chatContext(): string {
   return [`오늘: ${when(new Date().toISOString())}`, `과목: ${snap.courses.map((c) => c.name).join(", ")}`, ...lines].join("\n");
 }
 
+async function refreshCredits(): Promise<number | null> {
+  const left = await gateway.credits().catch(() => null);
+  const changed = left !== credits.left;
+  credits.left = left;
+  credits.at = Date.now();
+  if (changed) send("settings", settings());
+  return left;
+}
+
 /**
- * A sentence the local rules could not place. Jev classifies it in one decisions call; a confident read runs a
- * read command, a page request opens the school page on the left, a write request is refused with the page to do
- * it on, and conversation goes to the cheap chat model. Each Gateway call carries a flat filter fee, so a sentence
- * costs one or two calls at most.
+ * A typed sentence. Jev classifies it in one decisions call: a confident read becomes an intent the chat runs like
+ * a chip, a page request opens the school page on the left, a write request is refused with the page to do it on,
+ * and conversation goes to the cheap chat model; an unsure read asks back in one sentence. Each Gateway call carries
+ * a flat filter fee, so a sentence costs one or two calls. Without the AI, without enough credits, or when the call
+ * fails, the chat falls back to its word rules.
  */
 async function chat(text: string): Promise<ChatReply> {
-  if (!gateway.connected) return { kind: "error", text: "고대 AI가 아직 연결되지 않았어요" };
+  if (!gateway.connected) return { kind: "fallback", reason: "offline" };
+  const left = Date.now() - credits.at < CREDITS_FRESH_MS ? credits.left : await refreshCredits();
+  if (left !== null && left < CHAT_MIN_CREDITS) return { kind: "fallback", reason: "credits" };
   const snap = lms.snapshot();
   const courses = snap.courses.map((c) => c.name);
+  const menus = sites.snapshot().menus;
   const courseId = (n?: string) => snap.courses.find((c) => c.name === n)?.id;
   try {
-    const route = parseJev(await gateway.decide(jevRequest(text, courses)), courses);
-    if (!route) return { kind: "error", text: "AI 답을 읽지 못했어요" };
-    if (route.kind !== "chat" && route.confidence < ROUTE_CONFIDENCE) {
-      return { kind: "clarify", text: await gateway.complete(CLARIFY_PROMPT, routeUserPrompt(text, courses), 80) };
+    let route;
+    try {
+      route = parseJev(await gateway.decide(jevRequest(text, courses, menus)), courses, menus);
+    } catch {
+      route = null;
     }
-    const open = (): boolean => !!pane.open(pageUrl(CANVAS_ORIGIN, route.topic, courseId(route.course), ATTENDANCE_TOOL_ID));
-    switch (route.kind) {
-      case "write": {
-        const next = route.topic === "deadlines" ? nextAssignmentUrl(courseId(route.course)) : null;
-        if (!next || !pane.open(next)) open();
-      }
-        return { kind: "refused", text: "제출, 출석, 글쓰기처럼 학교에 무언가를 바꾸는 일은 앱이 하지 않아요. 왼쪽 학교 화면에서 직접 해 주세요." };
-      case "command": {
-        const command = commandOf(route);
-        if (command) return { kind: "command", command };
-        return open() ? { kind: "opened", text: "왼쪽에 학교 화면을 열었어요" } : { kind: "error", text: "그 화면을 열지 못했어요" };
-      }
-      case "path":
-        return open() ? { kind: "opened", text: `${route.course ? `${route.course} ` : ""}학교 화면을 왼쪽에 열었어요` } : { kind: "error", text: "그 화면을 열지 못했어요" };
-      case "chat":
-        return { kind: "answer", text: await gateway.complete(CHAT_PROMPT, chatUserPrompt(text, chatContext()), 300) };
+    if (!route) return { kind: "fallback", reason: "failed" };
+    const clarify = async (): Promise<ChatReply> => ({ kind: "clarify", text: await gateway.complete(CLARIFY_PROMPT, routeUserPrompt(text, courses), 80) });
+    if (unsure(route, ROUTE_CONFIDENCE)) return await clarify();
+    const open = (topic = route.topic): ChatReply =>
+      pane.open(pageUrl(CANVAS_ORIGIN, topic, courseId(route.course), ATTENDANCE_TOOL_ID))
+        ? { kind: "opened", text: `${route.course ? `${route.course} ` : ""}학교 화면을 왼쪽에 열었어요` }
+        : { kind: "error", text: "그 화면을 열지 못했어요" };
+    if (route.kind === "write") {
+      const next = route.topic === "deadlines" ? nextAssignmentUrl(courseId(route.course)) : null;
+      if (!next || !pane.open(next)) open();
+      return { kind: "refused", text: "제출, 출석, 글쓰기처럼 학교에 무언가를 바꾸는 일은 앱이 하지 않아요. 왼쪽 학교 화면에서 직접 해 주세요." };
     }
+    const action = intentOf(route);
+    if (action && "intent" in action) return { kind: "intent", intent: action.intent };
+    if (action) return open(action.open);
+    if (route.kind === "chat") return { kind: "answer", text: await gateway.complete(CHAT_PROMPT, chatUserPrompt(text, chatContext()), 300) };
+    return await clarify();
   } catch (error) {
     return { kind: "error", text: error instanceof Error ? error.message : "AI에 묻지 못했어요" };
+  } finally {
+    void refreshCredits();
   }
 }
 
@@ -531,7 +554,8 @@ async function startLoading(): Promise<void> {
   clearTimeout(hint);
   void gateway.restore().finally(() => {
     gatewayRestored = true;
-    if (lms.snapshot().phase === "ready" && !aiAttempted && !gateway.connected) void connectAi();
+    if (gateway.connected) void refreshCredits();
+    else if (lms.snapshot().phase === "ready" && !aiAttempted) void connectAi();
   });
   void lms.refresh();
   void sites.refresh();
