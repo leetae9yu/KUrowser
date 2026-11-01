@@ -2,9 +2,9 @@ import { ArrowLeft, Bell, Check, Download, ExternalLink, Play, Sparkles } from "
 import type { Outcome } from "../commands";
 import { courseOf, type Notice } from "../data";
 import { api, jobFor, useStore } from "../store";
+import { FileGroups, RecordingGroups } from "./CourseGroups";
 import { CourseList, CourseView } from "./CourseView";
-import { RecordingRow } from "./RecordingRow";
-import { FileRow, LectureRow, NoticeRow } from "./Rows";
+import { LectureRow, NoticeRow } from "./Rows";
 import { LoanRow, MenuButtons, PortalRow, ScheduleRow, SeatRow } from "./SiteRows";
 import { Timeline } from "./Timeline";
 
@@ -89,11 +89,6 @@ function useNextActions(outcome: Outcome): Action[] {
       run: () => download(left),
     });
   }
-  if (outcome.kind === "download" && !outcome.start) {
-    const left = outcome.files.filter((f) => !downloaded.has(f.id) && !jobFor(jobs, f.id));
-    if (outcome.files.length)
-      out.push({ label: left.length ? `${left.length}개 모두 받기` : "모두 받았어요", icon: Download, done: left.length === 0, run: () => download(left) });
-  }
   return out;
 }
 
@@ -114,13 +109,7 @@ export function ResultCard({ outcome, onRun, onBack }: { outcome: Outcome; onRun
             ))}
           </ul>
         )}
-        {outcome.kind === "download" && (
-          <ul className="list">
-            {outcome.files.map((f) => (
-              <FileRow key={f.id} f={f} />
-            ))}
-          </ul>
-        )}
+        {outcome.kind === "download" && <FileGroups courseId={outcome.courseId} onlyNew={outcome.onlyNew} />}
         {outcome.kind === "notices" && (
           <ul className="list">
             {outcome.items.map((n) => (
@@ -159,13 +148,7 @@ export function ResultCard({ outcome, onRun, onBack }: { outcome: Outcome; onRun
             ))}
           </ul>
         )}
-        {outcome.kind === "recordings" && (
-          <ul className="list">
-            {outcome.items.map((r) => (
-              <RecordingRow key={r.id} r={r} />
-            ))}
-          </ul>
-        )}
+        {outcome.kind === "recordings" && <RecordingGroups items={outcome.items} courseId={outcome.courseId} />}
       </div>
       {actions.length > 0 && (
         <div className="stage-actions">
