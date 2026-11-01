@@ -51,9 +51,15 @@ const LIBRARY_WORDS: readonly (readonly [string, string[]])[] = [
 
 const OPEN_WORDS = ["열어", "열기", "화면", "들어가", "바로가기", "가줘", "켜줘", "페이지"];
 /** Calendar words a student asks the registrar's calendar about; the first match also filters the answer. */
-const SCHEDULE_WORDS = ["중간고사", "기말고사", "수강신청", "수강정정", "수강포기", "개강", "종강", "방학", "휴학", "복학", "등록기간", "졸업", "전과", "이중전공", "복수전공", "공휴일"];
+export const SCHEDULE_WORDS = ["중간고사", "기말고사", "수강신청", "수강정정", "수강포기", "개강", "종강", "방학", "휴학", "복학", "등록기간", "졸업", "전과", "이중전공", "복수전공", "공휴일"];
 
 const has = (s: string, ...words: string[]) => words.some((w) => s.includes(w));
+
+/** The library a sentence names, nicknames included (중도, 과도). */
+export const libraryIn = (raw: string): string | undefined => {
+  const s = raw.toLowerCase().replace(/\s+/g, "");
+  return LIBRARY_WORDS.find(([, words]) => has(s, ...words))?.[0];
+};
 
 function findCourse(s: string, data: Data): Course | undefined {
   const bare = (name: string) => shortCourseName(name).toLowerCase().replace(/\s+/g, "");

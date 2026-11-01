@@ -1,7 +1,7 @@
 import { Check } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import type { ChatReply, ReadCommand } from "../../shared/types";
-import { loansOutcome, outcomeFor, parseRules, portalOutcome, recordingsOutcome, scheduleOutcome, seatsOutcome, type Outcome, type Parsed } from "../commands";
+import type { ChatIntent, ChatReply, SchoolMenu } from "../../shared/types";
+import { libraryIn, loansOutcome, outcomeFor, parseRules, portalOutcome, recordingsOutcome, SCHEDULE_WORDS, scheduleOutcome, seatsOutcome, type Outcome, type Parsed } from "../commands";
 import { AmsCard, type AmsTopic } from "../components/AmsCard";
 import { CommandInput } from "../components/CommandInput";
 import { ResultCard } from "../components/ResultCard";
@@ -20,11 +20,34 @@ type Draft = Message extends infer M ? (M extends Message ? Omit<M, "id"> : neve
 
 const AI_FAILED = "AI에 묻지 못했어요";
 const AMS_FRESH_MS = 30 * 60_000;
+const FALLBACK_NOTE: Record<Extract<ChatReply, { kind: "fallback" }>["reason"], string | null> = {
+  offline: null,
+  credits: "이번 달 AI 크레딧이 모자라서 단어로 알아들었어요",
+  failed: "AI에 묻지 못해서 단어로 알아들었어요",
+};
 
-function fromReply(reply: ChatReply, outcome: (command: ReadCommand) => Outcome): Draft {
+/** An AI intent as the rules would have parsed it; a download it names waits for the student's click. */
+function fromIntent(intent: ChatIntent, text: string, menus: SchoolMenu[]): Parsed {
+  switch (intent.kind) {
+    case "read":
+      return { kind: "read", command: intent.command };
+    case "schedule":
+      return { kind: "schedule", word: SCHEDULE_WORDS.find((w) => text.replace(/\s+/g, "").includes(w)) };
+    case "menu": {
+      const menu = menus.find((m) => m.id === intent.id);
+      return menu ? { kind: "menu", menu } : { kind: "menus" };
+    }
+    case "settings":
+      return { kind: "navigate", route: { name: "settings" }, title: "설정을 열었어요" };
+    case "seats":
+      return { kind: "seats", library: intent.library ?? libraryIn(text) };
+    default:
+      return intent;
+  }
+}
+
+function fromReply(reply: Exclude<ChatReply, { kind: "intent" | "fallback" }>): Draft {
   switch (reply.kind) {
-    case "command":
-      return { from: "app", kind: "result", outcome: outcome(reply.command) };
     case "refused":
       return { from: "app", kind: "text", text: reply.text, tone: "quiet" };
     case "opened":
@@ -90,7 +113,8 @@ export function Chat({ active }: { active: boolean }) {
   const asked = messages.some((m) => m.from === "user");
   const count = messages.length + (busy ? 1 : 0);
   const seen = useRef(0);
-  const queued = useRef<string[]>([]);
+  /** Requests waiting for data; one made before any course loaded is read again from its text once they have. */
+  const queued = useRef<Array<{ text: string; typed: boolean; rules: Parsed; blind: boolean }>>([]);
 
   useLayoutEffect(() => {
     const thread = threadRef.current;
@@ -160,25 +184,60 @@ export function Chat({ active }: { active: boolean }) {
   };
 
   useEffect(() => {
-    const text = queued.current[0];
-    if (!text || busy) return;
-    if (waiting(parseRules(text, store.data, store.sites))) return;
+    const next = queued.current[0];
+    if (!next || busy) return;
+    if (next.blind ? !coursesKnown() : waiting(next.rules)) return;
     queued.current = queued.current.slice(1);
-    void send(text, false);
+    void (next.blind ? send(next.text, next.typed, false) : perform(next.rules, next.text, next.typed));
   });
 
-  const send = async (text: string, echo = true) => {
+  const coursesKnown = (): boolean => {
+    const s = latest.current;
+    return s.data.courses.length > 0 || s.snapshot.phase === "ready" || s.snapshot.phase === "error";
+  };
+
+  const hold = (text: string, typed: boolean, rules: Parsed) => {
+    const s = latest.current;
+    queued.current = [...queued.current, { text, typed, rules, blind: !coursesKnown() }];
+    const site = rules.kind === "portal" || rules.kind === "schedule" || rules.kind === "loans";
+    const login = !site && (s.snapshot.phase === "login" || s.snapshot.phase === "keychain");
+    push({ from: "app", kind: "text", text: login ? "학교 로그인이 끝나면 이어서 할게요" : "아직 불러오는 중이에요. 끝나면 이어서 할게요", tone: "plain" });
+  };
+
+  /**
+   * A typed sentence goes to Jev first; chips, card buttons and course names are fixed commands and run at once
+   * with the word rules. The rules also answer when the AI is not connected, out of credits, or its call failed.
+   */
+  const send = async (text: string, typed: boolean, echo = true) => {
     if (busy) return;
     if (echo) push({ from: "user", text });
     const s = latest.current;
-    const rules = parseRules(text, s.data, s.sites);
-    if (waiting(rules)) {
-      queued.current = [...queued.current, text];
-      const site = rules.kind === "portal" || rules.kind === "schedule" || rules.kind === "loans";
-      const login = !site && (s.snapshot.phase === "login" || s.snapshot.phase === "keychain");
-      push({ from: "app", kind: "text", text: login ? "학교 로그인이 끝나면 이어서 할게요" : "아직 불러오는 중이에요. 끝나면 이어서 할게요", tone: "plain" });
-      return;
+    if (!typed || !s.settings?.aiConnected) return perform(parseRules(text, s.data, s.sites), text, typed);
+    // Jev picks the course from the course list, so a sentence typed before any course loaded waits for it.
+    if (!coursesKnown()) return hold(text, typed, parseRules(text, s.data, s.sites));
+    setBusy(true);
+    let reply: ChatReply;
+    try {
+      reply = await api().chat(text);
+    } catch (error) {
+      reply = { kind: "error", text: error instanceof Error && error.message ? error.message : AI_FAILED };
+    } finally {
+      setBusy(false);
     }
+    const now = latest.current;
+    if (reply.kind === "intent") return perform(fromIntent(reply.intent, text, now.sites.menus), text, false);
+    if (reply.kind === "fallback") {
+      const note = FALLBACK_NOTE[reply.reason];
+      if (note) push({ from: "app", kind: "text", text: note, tone: "quiet" });
+      return perform(parseRules(text, now.data, now.sites), text, false);
+    }
+    push(fromReply(reply));
+  };
+
+  /** `typed` stays true only for a sentence the AI has not read yet, so a re-read after loading may still ask it. */
+  const perform = async (rules: Parsed, text: string, typed: boolean) => {
+    const s = latest.current;
+    if (waiting(rules)) return hold(text, typed, rules);
     if (rules.kind === "theme") {
       s.setTheme(rules.theme);
       push({ from: "app", kind: "text", text: rules.title, tone: "plain" });
@@ -239,25 +298,13 @@ export function Chat({ active }: { active: boolean }) {
       return;
     }
     const snap = { watched: s.watched, read: s.read, downloaded: s.downloaded };
-    if (rules.command.command !== "unknown" || !s.settings?.aiConnected) {
-      const outcome = outcomeFor(rules.command, s.data, snap, !!rules.start);
-      if (outcome.kind === "download" && outcome.start) s.download(outcome.files);
-      push({ from: "app", kind: "result", outcome });
-      return;
-    }
-    setBusy(true);
-    try {
-      const reply = await api().chat(text);
-      const now = latest.current;
-      push(fromReply(reply, (command) => outcomeFor(command, now.data, { watched: now.watched, read: now.read, downloaded: now.downloaded })));
-    } catch (error) {
-      push({ from: "app", kind: "text", text: error instanceof Error && error.message ? error.message : AI_FAILED, tone: "plain" });
-    } finally {
-      setBusy(false);
-    }
+    const outcome = outcomeFor(rules.command, s.data, snap, !!rules.start);
+    if (outcome.kind === "download" && outcome.start) s.download(outcome.files);
+    push({ from: "app", kind: "result", outcome });
   };
 
-  const run = (text: string) => void send(text);
+  const run = (text: string) => void send(text, false);
+  const ask = (text: string) => void send(text, true);
 
   return (
     <section className="chat" hidden={!active} aria-label="대화">
@@ -302,7 +349,10 @@ export function Chat({ active }: { active: boolean }) {
             </ul>
           </>
         )}
-        <CommandInput id="chat-input" label="한 문장으로 말하기" placeholder="예: 이번 주 마감 뭐 있어" busy={busy} autoFocus onRun={run} />
+        <CommandInput id="chat-input" label="한 문장으로 말하기" placeholder="예: 이번 주 마감 뭐 있어" busy={busy} autoFocus onRun={ask} />
+        {store.settings?.aiConnected && store.settings.aiCredits !== null && (
+          <p className="composer-note">고대 AI · 이번 달 남은 크레딧 {Math.floor(store.settings.aiCredits).toLocaleString("ko-KR")}</p>
+        )}
       </div>
     </section>
   );
