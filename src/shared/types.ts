@@ -167,6 +167,14 @@ export interface AmsGrade {
   grade: string;
 }
 
+/** Credits earned in one term, or in one course category (전공필수, 교양 ...). */
+export interface AmsCreditLine {
+  label: string;
+  earned: number;
+  /** Grade-point average of the graded courses in it; empty when none is graded by letter. */
+  gpa: string;
+}
+
 export interface AmsSummary {
   term: string;
   classes: AmsClass[];
@@ -174,6 +182,9 @@ export interface AmsSummary {
   grades: AmsGrade[];
   gpa: string;
   earned: string;
+  /** Terms in order, oldest first. */
+  terms: AmsCreditLine[];
+  categories: AmsCreditLine[];
 }
 
 /**

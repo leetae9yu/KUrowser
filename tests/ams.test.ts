@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { AMS_LOOKUPS, AmsSignedOut, enrolledCredits, lookupForm, lookupSets, periodSpan, pickTerm, signedIn, summary, timetable } from "../src/main/ams-data.ts";
+import { AMS_LOOKUPS, AmsSignedOut, enrolledCredits, grades, lookupForm, lookupSets, periodSpan, pickTerm, signedIn, summary, timetable } from "../src/main/ams-data.ts";
 import { AmsService } from "../src/main/ams.ts";
 import { parseRules } from "../src/renderer/commands.ts";
 import type { AmsState } from "../src/shared/types.ts";
@@ -61,6 +61,61 @@ describe("timetable and credits", () => {
       gradeSets: { dsGradeAll: [{ ratlcSyySmtNm: "2026학년도 1학기", subjtNm: "가짜과목", cmpsjDivNm: "전공", cdt: "3", gradeGrdDivcd: "A0" }], dsGradeAcmtlAll: [{ gpa: "9.99", cmpsjCdt: "999" }] },
     });
     expect(s).toMatchObject({ term: "2026학년도 2학기", enrolledCredits: 3, gpa: "9.99", earned: "999", grades: [{ title: "가짜과목", grade: "A0", credits: "3" }] });
+  });
+
+  test("the cumulative line is the whole-record line after the term lines, not the first term's", () => {
+    // As the academic system answers: one line per term, oldest first, then one line for the whole record.
+    const g = grades({
+      dsGradeAll: [],
+      dsGradeAcmtlAll: [
+        { syy: 2025, smtDivcd: "1R", gpa: "1.11", cmpsjCdt: "18" },
+        { syy: 2025, smtDivcd: "2R", gpa: "2.22", cmpsjCdt: "20" },
+        { syy: 2026, smtDivcd: "1R", gpa: "3.33", cmpsjCdt: "16" },
+        { gpa: "4.44", cmpsjCdt: "54" },
+      ],
+    });
+    expect({ gpa: g.gpa, earned: g.earned }).toEqual({ gpa: "4.44", earned: "54" });
+  });
+
+  test("course rows without a term name are named from the year and term code; A and B count like A0 and B0", () => {
+    const g = grades({
+      dsGradeAll: [
+        { syy: 2025, smtDivcd: "1S", subjtNm: "가짜과목", cmpsjDivNm: "교양", cdt: 3, gradeGrdDivcd: "A" },
+        { syy: 2025, smtDivcd: "1R", subjtNm: "가짜과목", cmpsjDivNm: "교양", cdt: 3, gradeGrdDivcd: "B" },
+        { syy: 2025, smtDivcd: "2W", subjtNm: "가짜과목", cmpsjDivNm: "교양", cdt: 3, gradeGrdDivcd: "A+" },
+      ],
+    });
+    expect(g.terms).toEqual([
+      { label: "2025학년도 1학기", earned: 3, gpa: "3.00" },
+      { label: "2025학년도 여름학기", earned: 3, gpa: "4.00" },
+      { label: "2025학년도 겨울학기", earned: 3, gpa: "4.50" },
+    ]);
+  });
+
+  test("credits per term and per category come from the course rows; failed and ungraded courses earn none", () => {
+    const row = (term: string, category: string, cdt: string, grade: string) => ({ ratlcSyySmtNm: term, subjtNm: "가짜과목", cmpsjDivNm: category, cdt, gradeGrdDivcd: grade });
+    const g = grades({
+      dsGradeAll: [
+        row("2025학년도 2학기", "전공필수", "3", "B+"),
+        row("2025학년도 1학기", "전공필수", "3", "A+"),
+        row("2025학년도 1학기", "교양", "2", "P"),
+        row("2025학년도 여름학기", "교양", "3", "F"),
+        row("2026학년도 1학기", "전공선택", "3", ""),
+      ],
+    });
+    expect(g.terms).toEqual([
+      { label: "2025학년도 1학기", earned: 5, gpa: "4.50" },
+      { label: "2025학년도 여름학기", earned: 0, gpa: "0.00" },
+      { label: "2025학년도 2학기", earned: 3, gpa: "3.50" },
+      { label: "2026학년도 1학기", earned: 0, gpa: "" },
+    ]);
+    expect(g.categories.map((c) => [c.label, c.earned])).toEqual([
+      ["전공필수", 6],
+      ["교양", 2],
+      ["전공선택", 0],
+    ]);
+    // Without a cumulative set the course rows give the totals: 8 credits, (4.5*3 + 3.5*3 + 0*3) / 9.
+    expect({ earned: g.earned, gpa: g.gpa }).toEqual({ earned: "8", gpa: "2.67" });
   });
 });
 

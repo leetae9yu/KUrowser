@@ -2,6 +2,7 @@ import { ExternalLink, KeyRound, LoaderCircle, RefreshCw } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import type { AmsSummary } from "../../shared/types";
 import { api, useStore } from "../store";
+import { termOrder } from "../../shared/terms";
 
 export type AmsTopic = "grades" | "timetable" | "credits";
 
@@ -46,8 +47,38 @@ function Body({ topic, data }: { topic: AmsTopic; data: AmsSummary }) {
       </li>
     </ul>
   );
-  if (topic === "credits") return summary;
-  const latest = [...new Set(data.grades.map((g) => g.term))].sort().at(-1);
+  if (topic === "credits") {
+    const lines = (items: AmsSummary["terms"]) => (
+      <ul className="list">
+        {items.map((t) => (
+          <li key={t.label} className="row credit-line">
+            <span className="row-title">{t.label}</span>
+            <span className="credit-num">
+              {t.earned}학점{t.gpa && <span className="credit-gpa"> · 평점 {t.gpa}</span>}
+            </span>
+          </li>
+        ))}
+      </ul>
+    );
+    return (
+      <>
+        {summary}
+        {data.categories.length > 0 && (
+          <>
+            <h3 className="sub-title">이수구분별 취득</h3>
+            {lines(data.categories)}
+          </>
+        )}
+        {data.terms.length > 0 && (
+          <>
+            <h3 className="sub-title">학기별 취득</h3>
+            {lines(data.terms)}
+          </>
+        )}
+      </>
+    );
+  }
+  const latest = [...new Set(data.grades.map((g) => g.term))].sort((a, b) => termOrder(a) - termOrder(b)).at(-1);
   const rows = data.grades.filter((g) => g.term === latest);
   return (
     <>
@@ -71,7 +102,7 @@ function Body({ topic, data }: { topic: AmsTopic; data: AmsSummary }) {
   );
 }
 
-const TITLES: Record<AmsTopic, string> = { grades: "성적", timetable: "이번 학기 시간표", credits: "이수 학점" };
+const TITLES: Record<AmsTopic, string> = { grades: "성적", timetable: "이번 학기 시간표", credits: "이수 학점 현황" };
 
 /** Grades, timetable or credits from the academic system; asks for the mailed code in place when it needs one. */
 export function AmsCard({ topic }: { topic: AmsTopic }) {
