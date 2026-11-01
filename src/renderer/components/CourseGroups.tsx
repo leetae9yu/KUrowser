@@ -1,5 +1,5 @@
 import { ChevronDown, ChevronUp, Download } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useId, useState, type ReactNode } from "react";
 import { courseOf, type CourseId, type FileItem, type Recording } from "../data";
 import { jobFor, useStore } from "../store";
 import { byWeek } from "../groups";
@@ -15,7 +15,7 @@ function byCourse<T extends { courseId: CourseId }>(items: T[], order: CourseId[
 function GroupCard({ courseId, line, done, total, open, onToggle, children }: { courseId: CourseId; line: string; done: number; total: number; open: boolean; onToggle: () => void; children: ReactNode }) {
   const course = courseOf(useStore().data, courseId);
   const pct = total ? Math.round((done / total) * 100) : 0;
-  const body = `group-${courseId}`;
+  const body = useId();
   return (
     <li className={`group${open ? " is-open" : ""}`}>
       <button type="button" className="group-head" aria-expanded={open} aria-controls={body} onClick={onToggle}>
@@ -58,10 +58,11 @@ function Weeks<T extends { id: string }>({ items, label, row }: { items: T[]; la
 export function FileGroups({ courseId, onlyNew }: { courseId?: CourseId; onlyNew?: boolean }) {
   const { data, downloaded, jobs, download } = useStore();
   const scope = data.files.filter((f) => !courseId || f.courseId === courseId);
-  const saved = (f: FileItem) => downloaded.has(f.id) || f.downloaded;
-  const groups = byCourse(scope, data.courses.map((c) => c.id)).filter(([, files]) => !onlyNew || files.some((f) => f.isNew && !saved(f)));
+  const saved = (f: FileItem) => downloaded.has(f.id);
+  const isFresh = (f: FileItem) => f.isNew && f.available && !saved(f);
+  const groups = byCourse(scope, data.courses.map((c) => c.id)).filter(([, files]) => !onlyNew || files.some(isFresh));
   const [open, setOpen] = useState<CourseId | null>(courseId ?? (groups.length === 1 ? groups[0]![0] : null));
-  const fresh = scope.filter((f) => f.isNew && f.available && !saved(f) && !jobFor(jobs, f.id));
+  const fresh = scope.filter((f) => isFresh(f) && !jobFor(jobs, f.id));
   if (!groups.length) return null;
   return (
     <>
@@ -74,7 +75,7 @@ export function FileGroups({ courseId, onlyNew }: { courseId?: CourseId; onlyNew
       <ul className="groups">
         {groups.map(([id, files]) => {
           const got = files.filter(saved).length;
-          const news = files.filter((f) => f.isNew && !saved(f)).length;
+          const news = files.filter(isFresh).length;
           const left = files.filter((f) => f.available && !saved(f) && !jobFor(jobs, f.id));
           return (
             <GroupCard
