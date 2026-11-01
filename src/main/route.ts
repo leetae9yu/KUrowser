@@ -1,4 +1,5 @@
 import type { ChatIntent, ReadCommand, SchoolMenu, TreeState } from "../shared/types.ts";
+import { JEV_MODEL } from "./jev-guard.ts";
 import { readTree, treeQuestions } from "./tree.ts";
 
 /** command: the app reads school data and shows it; path: open a school page; chat: answer in words; write: change something at school (refused). */
@@ -98,7 +99,7 @@ export function jevRequest(text: string, courses: string[], menus: readonly Scho
   const libraryCriteria: Record<string, string> = Object.fromEntries(LIBRARIES.map((l) => [l, l]));
   libraryCriteria[NONE] = "특정 도서관을 말하지 않음";
   return {
-    model: "jev-latest",
+    model: JEV_MODEL,
     state: { 학생_문장: text, 이번_학기_과목: courses },
     questions: {
       kind: { type: "choice", instructions: "학생 문장은 어떤 요청인가?", criteria: KINDS },
@@ -215,7 +216,7 @@ export function intentOf(route: Route): { intent: ChatIntent } | { open: Topic }
 }
 
 export const ROUTE_PROMPT = `너는 고려대 LMS 앱의 요청 분류기야. 학생 문장을 아래 JSON 하나로만 바꿔. 설명, 코드 블록, 다른 글자는 쓰지 마.
-{"kind":"command|path|chat|write","topic":"deadlines|lectures|notices|files|grades|syllabus|course_home|courses|none","course":"과목 이름 또는 null","range":"today|tomorrow|week|nextweek|month","onlyNew":true|false,"confidence":0~1}
+{"kind":"command|path|chat|write","topic":"${Object.keys(TOPICS).join("|")}","course":"과목 이름 또는 null","range":"today|tomorrow|week|nextweek|month","onlyNew":true|false,"confidence":0~1}
 kind:
 ${Object.entries(KINDS)
   .map(([k, v]) => `- ${k}: ${v}`)

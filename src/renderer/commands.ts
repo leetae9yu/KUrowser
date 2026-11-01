@@ -29,7 +29,6 @@ export interface Snapshot {
 export type Parsed =
   | { kind: "read"; command: ReadCommand; start?: boolean }
   | { kind: "recordings"; course?: string }
-  | { kind: "theme"; theme: Theme; title: string }
   | { kind: "navigate"; route: Route; title: string }
   | { kind: "portal" }
   | { kind: "schedule"; word?: string }
@@ -49,7 +48,6 @@ const LIBRARY_WORDS: readonly (readonly [string, string[]])[] = [
   ["법학도서관", ["법학도서관", "법도"]],
 ];
 
-const OPEN_WORDS = ["열어", "열기", "화면", "들어가", "바로가기", "가줘", "켜줘", "페이지"];
 /** Calendar words a student asks the registrar's calendar about; the first match also filters the answer. */
 export const SCHEDULE_WORDS = ["중간고사", "기말고사", "수강신청", "수강정정", "수강포기", "개강", "종강", "방학", "휴학", "복학", "등록기간", "졸업", "전과", "이중전공", "복수전공", "공휴일"];
 
@@ -61,67 +59,56 @@ export const libraryIn = (raw: string): string | undefined => {
   return LIBRARY_WORDS.find(([, words]) => has(s, ...words))?.[0];
 };
 
-function findCourse(s: string, data: Data): Course | undefined {
-  const bare = (name: string) => shortCourseName(name).toLowerCase().replace(/\s+/g, "");
-  return data.courses.find((c) => c.aliases.some((a) => a && s.includes(a)) || (bare(c.name).length > 1 && s.includes(bare(c.name))));
+export interface Chip {
+  label: string;
+  parsed: Parsed;
 }
 
-function rangeOf(s: string): Extract<ReadCommand, { command: "deadlines" }>["range"] {
-  if (has(s, "오늘")) return "today";
-  if (has(s, "내일")) return "tomorrow";
-  if (has(s, "다음주")) return "nextweek";
-  if (has(s, "이번달", "한달")) return "month";
-  return "week";
+const read = (command: ReadCommand, start = false): Parsed => (start ? { kind: "read", command, start } : { kind: "read", command });
+
+/** A course picked from the course list. */
+export const courseCommand = (course: string): Parsed => read({ command: "course", course });
+
+/** The chips under the input: fixed commands that run at once, without the AI. */
+export function homeChips(data: Data): Chip[] {
+  const [first, second] = data.courses;
+  const chips: Chip[] = [
+    { label: "이번 주 마감 뭐 있어", parsed: read({ command: "deadlines", range: "week" }) },
+    first
+      ? { label: `${shortCourseName(first.name)} 자료 다 받아줘`, parsed: read({ command: "files", course: first.name, onlyNew: false }, true) }
+      : { label: "새 자료 다 받아줘", parsed: read({ command: "files", onlyNew: true }, true) },
+    { label: "안 본 강의 몇 개야", parsed: read({ command: "lectures" }) },
+    { label: "녹화강의 요약해줘", parsed: { kind: "recordings" } },
+    { label: "공지 요약해줘", parsed: read({ command: "notices" }) },
+    { label: "학교 공지 보여줘", parsed: { kind: "portal" } },
+    { label: "다음 학사 일정 뭐야", parsed: { kind: "schedule" } },
+    { label: "중앙도서관 빈자리 있어?", parsed: { kind: "seats", library: "중앙도서관" } },
+    { label: "빌린 책 반납일 알려줘", parsed: { kind: "loans" } },
+    { label: "이번 학기 성적 알려줘", parsed: { kind: "ams", topic: "grades" } },
+    { label: "내 시간표 보여줘", parsed: { kind: "ams", topic: "timetable" } },
+  ];
+  if (second) chips.push({ label: `${shortCourseName(second.name)} 열어줘`, parsed: courseCommand(second.name) });
+  chips.push({ label: "과목 전체 보기", parsed: read({ command: "courses" }) });
+  return chips;
 }
 
-/** Words that name an LMS item; a sentence with one stays with the LMS rules even when it also names a calendar event. */
-const LMS_WORDS = ["공지", "자료", "파일", "강의", "녹화", "인강", "과제", "숙제", "제출", "마감", "슬라이드"];
-
-/** School-site sentences: a page to open on the left, the academic calendar, or the portal board. */
-function parseSites(s: string, sites: SitesSnapshot | undefined, course: string | undefined): Parsed | null {
-  const menu = sites?.menus.find((m) => m.words.some((w) => s.includes(w)));
-  if (menu && has(s, ...OPEN_WORDS)) return { kind: "menu", menu };
-  if (has(s, "학교메뉴", "학교바로가기", "학교사이트")) return { kind: "menus" };
-  if (!has(s, ...LMS_WORDS)) {
-    if (has(s, "이수학점", "취득학점", "몇학점", "학점요약", "졸업학점", "신청학점")) return { kind: "ams", topic: "credits" };
-    if (has(s, "성적", "평점", "gpa", "학점")) return { kind: "ams", topic: "grades" };
-    if (has(s, "시간표", "오늘수업", "내일수업", "수업시간", "강의실어디")) return { kind: "ams", topic: "timetable" };
-  }
-  const library = LIBRARY_WORDS.find(([, words]) => has(s, ...words))?.[0];
-  if (has(s, "열람실", "좌석") || (has(s, "자리", "빈자리") && (library || has(s, "도서관")))) return { kind: "seats", library };
-  if (has(s, "빌린책", "대출", "반납", "연체", "도서관책", "빌려온") && (!has(s, ...LMS_WORDS) || has(s, "도서관", "책"))) return { kind: "loans" };
-  if (has(s, "학교공지", "포털", "학사공지", "전체공지", "학교소식", "kupid")) return { kind: "portal" };
-  if (has(s, "학사일정", "학사력", "학사달력")) return { kind: "schedule", word: SCHEDULE_WORDS.find((w) => s.includes(w)) };
-  const word = SCHEDULE_WORDS.find((w) => s.includes(w));
-  if (word && !course && !has(s, ...LMS_WORDS)) return { kind: "schedule", word };
-  return null;
-}
-
-export function parseRules(raw: string, data: Data, sites?: SitesSnapshot): Parsed {
-  const s = raw.toLowerCase().replace(/\s+/g, "");
-  const course = findCourse(s, data)?.name;
-
-  if (has(s, "다크", "어둡", "어두운", "밤모드")) return { kind: "theme", theme: "dark", title: "어두운 화면으로 바꿨어요" };
-  if (has(s, "라이트", "밝게", "밝은")) return { kind: "theme", theme: "light", title: "밝은 화면으로 바꿨어요" };
-  const site = parseSites(s, sites, course);
-  if (site) return site;
-  if (has(s, "설정", "계정", "api", "로그아웃", "ai연결")) return { kind: "navigate", route: { name: "settings" }, title: "설정을 열었어요" };
-  // "받아쓰기" contains "받아", so this sits before the download rule; lecture notes (강의안, 자료) stay files.
-  if (has(s, "자막", "요약", "받아쓰기", "정리") && has(s, "강의", "녹화", "인강") && !has(s, "자료", "강의안", "슬라이드", "파일")) {
-    return { kind: "recordings", course };
-  }
-  if (has(s, "받아", "다운", "저장해", "내려받")) return { kind: "read", command: { command: "files", course, onlyNew: has(s, "새", "최신", "이번주") }, start: true };
-  if (has(s, "자료", "파일", "강의안", "슬라이드")) return { kind: "read", command: { command: "files", course, onlyNew: has(s, "새", "최신") } };
-  if (has(s, "마감", "과제", "숙제", "할일", "해야", "제출", "due", "일정", "캘린더", "달력", "타임라인")) {
-    return { kind: "read", command: { command: "deadlines", range: rangeOf(s), course, assignmentsOnly: has(s, "과제", "숙제", "제출") } };
-  }
-  if (has(s, "강의", "녹화", "인강", "영상")) return { kind: "read", command: { command: "lectures", course } };
-  if (has(s, "공지", "알림", "새소식")) return { kind: "read", command: { command: "notices", course } };
-  if (course) return { kind: "read", command: { command: "course", course } };
-  if (has(s, "과목", "수업", "강좌")) return { kind: "read", command: { command: "courses" } };
-  if (has(s, "오늘", "홈", "처음")) return { kind: "navigate", route: { name: "today" }, title: "할 일 화면을 열었어요" };
-  return { kind: "read", command: { command: "unknown" } };
-}
+/** What a typed sentence offers when the AI cannot read it: the common requests, none of which starts a download. */
+export const FALLBACK_CHIPS: readonly Chip[] = [
+  { label: "이번 주 마감", parsed: read({ command: "deadlines", range: "week" }) },
+  { label: "새 자료", parsed: read({ command: "files", onlyNew: true }) },
+  { label: "안 본 강의", parsed: read({ command: "lectures" }) },
+  { label: "녹화강의 자막·요약", parsed: { kind: "recordings" } },
+  { label: "과목 공지", parsed: read({ command: "notices" }) },
+  { label: "학교 공지", parsed: { kind: "portal" } },
+  { label: "성적", parsed: { kind: "ams", topic: "grades" } },
+  { label: "시간표", parsed: { kind: "ams", topic: "timetable" } },
+  { label: "이수 학점", parsed: { kind: "ams", topic: "credits" } },
+  { label: "학사 일정", parsed: { kind: "schedule" } },
+  { label: "열람실 빈자리", parsed: { kind: "seats" } },
+  { label: "도서관 대출", parsed: { kind: "loans" } },
+  { label: "학교 화면 목록", parsed: { kind: "menus" } },
+  { label: "설정", parsed: { kind: "navigate", route: { name: "settings" }, title: "설정을 열었어요" } },
+];
 
 function rangeDates(range: Extract<ReadCommand, { command: "deadlines" }>["range"]): { from: Date; to: Date; label: string } {
   const now = new Date();
@@ -248,6 +235,6 @@ export function outcomeFor(command: ReadCommand, data: Data, snap: Snapshot, sta
     case "courses":
       return { kind: "courses", title: `이번 학기 과목 ${data.courses.length}개` };
     case "unknown":
-      return { kind: "unknown", title: "아직 이 문장은 이해하지 못해요. 고대 AI를 연결하면 더 많은 문장을 알아들어요." };
+      return { kind: "unknown", title: "그 요청은 아직 할 수 없어요" };
   }
 }

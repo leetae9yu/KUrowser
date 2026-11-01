@@ -1,4 +1,5 @@
 import type { TreeState } from "../shared/types.ts";
+import { JEV_MODEL } from "./jev-guard.ts";
 import { amsMenu } from "./portal.ts";
 import { PORTAL_SCREENS } from "./portal-menus.ts";
 
@@ -93,7 +94,7 @@ const STEP_QUESTIONS = {
 export function stepRequest(text: string, step: keyof typeof STEP_QUESTIONS, labels: string[]): Record<string, unknown> {
   const criteria: Record<string, string> = Object.fromEntries(labels.map((l, i) => [`o${i}`, l]));
   criteria[NONE] = "이 중에 없음";
-  return { model: "jev-latest", state: { 학생_문장: text }, questions: { pick: { type: "choice", instructions: STEP_QUESTIONS[step], criteria } } };
+  return { model: JEV_MODEL, state: { 학생_문장: text }, questions: { pick: { type: "choice", instructions: STEP_QUESTIONS[step], criteria } } };
 }
 
 export function readStep(body: unknown, labels: string[]): { label: string | null; confidence: number } {

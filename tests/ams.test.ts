@@ -2,10 +2,8 @@ import { describe, expect, test } from "bun:test";
 
 import { AMS_LOOKUPS, AmsSignedOut, enrolledCredits, grades, lookupForm, lookupSets, periodSpan, pickTerm, signedIn, summary, timetable } from "../src/main/ams-data.ts";
 import { AmsService } from "../src/main/ams.ts";
-import { parseRules } from "../src/renderer/commands.ts";
 import type { AmsState } from "../src/shared/types.ts";
 
-const noData = { courses: [], courseById: {}, assignments: [], lectures: [], recordings: [], notices: [], files: [] };
 
 describe("academic-system lookups", () => {
   test("the form carries the fixed menu fields and the conditions", () => {
@@ -155,11 +153,3 @@ describe("logout during a read", () => {
   });
 });
 
-describe("academic-system sentences", () => {
-  test("grades, timetable and credits read the academic system; a page request opens it; LMS words stay LMS", () => {
-    expect(parseRules("이번 학기 성적 알려줘", noData)).toEqual({ kind: "ams", topic: "grades" });
-    expect(parseRules("내 시간표 보여줘", noData)).toEqual({ kind: "ams", topic: "timetable" });
-    expect(parseRules("이수학점 몇이야", noData)).toEqual({ kind: "ams", topic: "credits" });
-    expect(parseRules("과제 성적 나왔어?", noData)).toMatchObject({ kind: "read" });
-  });
-});

@@ -2,9 +2,8 @@ import { describe, expect, test } from "bun:test";
 
 import { parseLoans, parseSeats } from "../src/main/library.ts";
 import { nextHop, siteUrl } from "../src/main/site-text.ts";
-import { parseRules, seatsOutcome } from "../src/renderer/commands.ts";
+import { seatsOutcome } from "../src/renderer/commands.ts";
 
-const noData = { courses: [], courseById: {}, assignments: [], lectures: [], recordings: [], notices: [], files: [] };
 
 describe("reading-room seats", () => {
   test("maps rooms and their hours, and refuses a failed envelope", () => {
@@ -59,11 +58,3 @@ describe("site hosts", () => {
   });
 });
 
-describe("library sentences", () => {
-  test("seats and loans, without taking LMS sentences", () => {
-    expect(parseRules("중도 빈자리 있어?", noData)).toEqual({ kind: "seats", library: "중앙도서관" });
-    expect(parseRules("열람실 좌석", noData)).toEqual({ kind: "seats", library: undefined });
-    expect(parseRules("빌린 책 반납일 알려줘", noData)).toEqual({ kind: "loans" });
-    expect(parseRules("과제 제출 반납 기한", noData)).toMatchObject({ kind: "read" });
-  });
-});

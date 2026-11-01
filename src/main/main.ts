@@ -21,7 +21,8 @@ import { amsPost, siteGet } from "./site-fetch.ts";
 import { type SitesCache, SitesService } from "./sites.ts";
 import { keepLogin, makeEngineWindow, schoolSession, signIn, signOut } from "./school.ts";
 import { COMMAND_PROMPT, SUMMARY_LECTURE_PROMPT, SUMMARY_PROMPT, commandUserPrompt, parseCommand, parseSummaries, summaryUserPrompt } from "./sentence.ts";
-import { CHAT_PROMPT, chatUserPrompt, CLARIFY_PROMPT, intentOf, jevRequest, pageUrl, parseJev, routeUserPrompt, unsure } from "./route.ts";
+import { classify, JEV_MODEL, JevGuard } from "./jev-guard.ts";
+import { CHAT_PROMPT, chatUserPrompt, CLARIFY_PROMPT, intentOf, jevRequest, pageUrl, parseJev, parseLlmRoute, ROUTE_PROMPT, routeUserPrompt, unsure } from "./route.ts";
 import { pick, PORTAL_GROUPS, portalScreens, readStep, stepOptions, stepPrompt, stepRequest, TREE_CONFIDENCE } from "./tree.ts";
 import { StateStore } from "./state.ts";
 import { captionText, estimateCredits, extractAudio, fetchCaption, resolveMedia, STT_MODEL, STT_SPEED, toSrt } from "./stt.ts";
@@ -60,6 +61,17 @@ const reminders = new ReminderScheduler(store);
 const engine = new EngineHost(engineSession);
 const hidden = <T>(job: (wc: Electron.WebContents) => Promise<T>): Promise<T> => engine.exclusive((session) => job(session.webContents!));
 const gateway = new GatewayClient(hidden);
+const AI_LOG = (): string => join(app.getPath("userData"), "ai-errors.log");
+/** Every failed AI call goes to the console, to ai-errors.log beside perf.log, and to the settings screen. */
+const jevGuard = new JevGuard((failure) => {
+  console.log(`AI_FAIL ${JSON.stringify(failure)}`);
+  try {
+    appendFileSync(AI_LOG(), `${JSON.stringify(failure)}\n`, { mode: 0o600 });
+  } catch {
+    // A read-only profile only loses the record; the settings screen still shows it.
+  }
+  send("settings", settings());
+});
 const lmsCache = new DiskCache<LmsCache>(join(app.getPath("userData"), "lms-cache.json"), 1);
 const pane = new SchoolPane(
   () => mainWindow,
@@ -110,6 +122,7 @@ function settings(): Settings {
     aiConnected: gateway.connected,
     aiLabel: gateway.label,
     aiCredits: gateway.connected ? credits.left : null,
+    aiErrors: { count: jevGuard.failures, last: jevGuard.last, pausedUntil: jevGuard.pausedUntil() },
     signedInBefore: store.get().signedInBefore,
   };
 }
@@ -175,8 +188,9 @@ async function refreshCredits(): Promise<number | null> {
  * A typed sentence. Jev classifies it in one decisions call: a confident read becomes an intent the chat runs like
  * a chip, a page request opens the school page on the left, a write request is refused with the page to do it on,
  * and conversation goes to the cheap chat model; an unsure read asks back in one sentence. Each Gateway call carries
- * a flat filter fee, so a sentence costs one or two calls. Without the AI, without enough credits, or when the call
- * fails, the chat falls back to its word rules.
+ * a flat filter fee, so a sentence costs one or two calls. When Jev fails on the server side or is paused, the cheap
+ * chat model classifies the sentence instead; when that fails too, or without the AI or enough credits, the chat
+ * offers its common requests as buttons rather than guessing.
  */
 async function chat(text: string): Promise<ChatReply> {
   if (!gateway.connected) return { kind: "fallback", reason: "offline" };
@@ -188,12 +202,11 @@ async function chat(text: string): Promise<ChatReply> {
   const menus = sites.snapshot().menus;
   const courseId = (n?: string) => snap.courses.find((c) => c.name === n)?.id;
   try {
-    let route;
-    try {
-      route = parseJev(await gateway.decide(jevRequest(text, courses, menus)), courses, menus);
-    } catch {
-      route = null;
-    }
+    const { route } = await classify(jevGuard, JEV_MODEL, () => gateway.decide(jevRequest(text, courses, menus)), (body) => parseJev(body, courses, menus), {
+      model: () => gateway.chatModelName,
+      call: () => gateway.complete(ROUTE_PROMPT, routeUserPrompt(text, courses), 120),
+      parse: (raw) => parseLlmRoute(raw, courses),
+    });
     if (!route) return { kind: "fallback", reason: "failed" };
     const clarify = async (): Promise<ChatReply> => ({ kind: "clarify", text: await gateway.complete(CLARIFY_PROMPT, routeUserPrompt(text, courses), 80) });
     if (unsure(route, ROUTE_CONFIDENCE)) return await clarify();
@@ -263,7 +276,8 @@ async function walkTree(start: TreeState, jevAnswered: ReadonlySet<TreeStep>): P
     const current = state;
     const ask = (): ChatReply => ({ kind: "choices", text: stepPrompt(step), options: labels.map((label) => ({ label, state: pick(current, step, label, labels)! })) });
     if (jevAnswered.has(step) || !(await canSpend())) return ask();
-    const answer = readStep(await gateway.decide(stepRequest(state.text, step, labels)).catch(() => null), labels);
+    const call = await jevGuard.run(JEV_MODEL, () => gateway.decide(stepRequest(state.text, step, labels)));
+    const answer = readStep(call.ok ? call.body : null, labels);
     if (!answer.label || answer.confidence < TREE_CONFIDENCE) return ask();
     state = pick(state, step, answer.label, labels)!;
   }
