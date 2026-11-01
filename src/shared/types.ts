@@ -268,8 +268,21 @@ export type ChatIntent =
  * What the main process made of a typed sentence. `fallback` means the AI could not be asked (not connected, too
  * few credits, a failed call), so the chat reads the sentence with its local word rules instead.
  */
+/**
+ * Where a request to open a school page stands in the three-step tree (LMS course or portal, course or portal
+ * group, screen). It names options only; the main process looks every address up again.
+ */
+export interface TreeState {
+  text: string;
+  area?: "lms" | "portal";
+  course?: string;
+  group?: string;
+  screen?: string;
+}
+
 export type ChatReply =
   | { kind: "intent"; intent: ChatIntent }
+  | { kind: "choices"; text: string; options: { label: string; state: TreeState }[] }
   | { kind: "fallback"; reason: "offline" | "credits" | "failed" }
   | { kind: "opened"; text: string }
   | { kind: "answer"; text: string }
@@ -307,6 +320,8 @@ export interface KurowserApi {
   onFocus(fn: (e: FocusEvent) => void): () => void;
   interpret(text: string): Promise<{ via: "ai" | "rules"; command: ReadCommand } | null>;
   chat(text: string): Promise<ChatReply>;
+  /** Continues a page request from a step the student picked. */
+  treeContinue(state: TreeState): Promise<ChatReply>;
   sttPlan(id: string): Promise<SttPlan>;
   sttRun(id: string): Promise<void>;
   onStt(fn: (e: SttEvent) => void): () => void;

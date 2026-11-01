@@ -425,6 +425,25 @@ export class LmsService {
     this.set({ files });
   }
 
+  private readonly tabs = new Map<string, { label: string; url: string }[]>();
+
+  /** A course's Canvas menu (its visible tabs), read with one GET the first time a page request needs it. */
+  async courseTabs(courseName: string): Promise<{ label: string; url: string }[]> {
+    const course = this.snap.courses.find((c) => c.name === courseName);
+    if (!course) return [];
+    const cached = this.tabs.get(course.id);
+    if (cached) return cached;
+    const data = await this.withSession((session) => session.fetchJson(`/api/v1/courses/${course.id}/tabs?per_page=100`), false);
+    // An error reply is not cached, so the next request reads the menu again.
+    if (!Array.isArray(data)) return [];
+    const list = (data as Raw[])
+      .filter((t) => t && !t.hidden && typeof t.label === "string" && typeof t.html_url === "string")
+      .map((t) => ({ label: String(t.label), url: new URL(String(t.html_url), CANVAS_ORIGIN).href }))
+      .filter((t) => t.url.startsWith(`${CANVAS_ORIGIN}/`));
+    this.tabs.set(course.id, list);
+    return list;
+  }
+
   /** The Commons content data of a recorded lecture (content id, viewer address, length); never the viewer itself. */
   mediaData(id: string): Raw | null {
     return this.links.media.get(id) ?? null;
@@ -493,6 +512,7 @@ export class LmsService {
   loggedOut(): void {
     this.links = emptyLinks();
     this.raws.clear();
+    this.tabs.clear();
     this.deps.cache.clear();
     this.set({ ...emptySnapshot("login") });
   }
