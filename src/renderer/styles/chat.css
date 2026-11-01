@@ -453,6 +453,23 @@
   }
 }
 
+.credit-line {
+  justify-content: space-between;
+  min-height: 0;
+  padding: var(--space-2) 0;
+}
+
+.credit-num {
+  flex: none;
+  font-weight: var(--weight-semibold);
+  font-variant-numeric: tabular-nums;
+}
+
+.credit-gpa {
+  font-weight: var(--weight-regular);
+  color: var(--text-2);
+}
+
 .ams-code .command-input {
   height: 52px;
   margin-top: var(--space-3);

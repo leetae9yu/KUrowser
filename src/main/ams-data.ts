@@ -1,4 +1,5 @@
-import type { AmsClass, AmsGrade, AmsSummary } from "../shared/types.ts";
+import type { AmsClass, AmsCreditLine, AmsGrade, AmsSummary } from "../shared/types.ts";
+import { termOrder } from "../shared/terms.ts";
 import { SiteError } from "./site-text.ts";
 
 export const AMS = "https://ams.korea.ac.kr";
@@ -114,19 +115,84 @@ export function enrolledCredits(enrolled: Raw[]): number {
   return Math.round(total * 10) / 10;
 }
 
-export function grades(sets: Raw): { rows: AmsGrade[]; gpa: string; earned: string } {
-  const list = rows(sets, AMS_LOOKUPS.grades.table).map((r) => ({
-    term: String(r.ratlcSyySmtNm ?? `${r.syy ?? ""} ${r.smtDivcd ?? ""}`).trim(),
+/** Letter grades on the 4.5 scale; P, S and the like carry credits but no points. */
+const POINTS: Readonly<Record<string, number>> = { "A+": 4.5, A0: 4, A: 4, "B+": 3.5, B0: 3, B: 3, "C+": 2.5, C0: 2, C: 2, "D+": 1.5, D0: 1, D: 1, F: 0 };
+/** Term codes of the academic system: regular terms end in R, summer and winter sessions in S and W. */
+const SEASONS: Readonly<Record<string, string>> = { "1R": "1학기", "1S": "여름학기", "2R": "2학기", "2W": "겨울학기" };
+
+/** A course row's term as students say it ("2025학년도 여름학기"); the rows carry a year and a term code. */
+function termName(r: Raw): string {
+  const named = String(r.ratlcSyySmtNm ?? "").trim();
+  if (named) return named;
+  const code = String(r.smtDivcd ?? "").trim();
+  return `${r.syy ?? ""}학년도 ${SEASONS[code] ?? code}`.trim();
+}
+/** Grades that earn no credit; an empty grade is a course not graded yet. */
+const NO_CREDIT = new Set(["", "F", "NP", "U", "W", "I", "N"]);
+
+const num = (v: unknown): number => {
+  const n = Number(String(v ?? "").trim());
+  return Number.isFinite(n) ? n : 0;
+};
+const round1 = (n: number): number => Math.round(n * 10) / 10;
+
+/** Earned credits and grade-point average of some grade rows. */
+function tally(label: string, list: AmsGrade[]): AmsCreditLine {
+  const earned = list.filter((g) => !NO_CREDIT.has(g.grade)).reduce((sum, g) => sum + num(g.credits), 0);
+  const graded = list.filter((g) => g.grade in POINTS && num(g.credits) > 0);
+  const weight = graded.reduce((sum, g) => sum + num(g.credits), 0);
+  const gpa = weight ? (graded.reduce((sum, g) => sum + POINTS[g.grade]! * num(g.credits), 0) / weight).toFixed(2) : "";
+  return { label, earned: round1(earned), gpa };
+}
+
+function groupBy(list: AmsGrade[], key: (g: AmsGrade) => string): AmsCreditLine[] {
+  const groups = new Map<string, AmsGrade[]>();
+  for (const g of list) groups.set(key(g), [...(groups.get(key(g)) ?? []), g]);
+  return [...groups].map(([label, items]) => tally(label, items));
+}
+
+/**
+ * The whole record: every course row, the school's cumulative earned credits and average, and the same counted per
+ * term and per course category from the course rows. The cumulative set holds one line per term (oldest first) and
+ * then one line for the whole record, which has the most earned credits; the course rows answer when it is missing.
+ * A row the school marks as dropped from the record (`gradeDelDivNm`, e.g. the first try of a retaken course) is
+ * listed but not counted.
+ */
+export function grades(sets: Raw): { rows: AmsGrade[]; gpa: string; earned: string; terms: AmsCreditLine[]; categories: AmsCreditLine[] } {
+  const raw = rows(sets, AMS_LOOKUPS.grades.table);
+  const toGrade = (r: Raw): AmsGrade => ({
+    term: termName(r),
     title: String(r.subjtNm ?? ""),
     category: String(r.cmpsjDivNm ?? ""),
     credits: String(r.cdt ?? ""),
     grade: String(r.gradeGrdDivcd ?? ""),
-  }));
-  const total = rows(sets, "dsGradeAcmtlAll")[0] ?? {};
-  return { rows: list, gpa: String(total.gpa ?? ""), earned: String(total.cmpsjCdt ?? total.aplyCdt ?? "") };
+  });
+  const list = raw.map(toGrade);
+  const counted = raw.filter((r) => !String(r.gradeDelDivNm ?? "").trim()).map(toGrade);
+  const earnedOf = (r: Raw): number => num(r.cmpsjCdt ?? r.aplyCdt);
+  const total = rows(sets, "dsGradeAcmtlAll").reduce<Raw | null>((best, r) => (!best || earnedOf(r) >= earnedOf(best) ? r : best), null);
+  const all = tally("", counted);
+  const terms = groupBy(counted, (g) => g.term).sort((a, b) => termOrder(a.label) - termOrder(b.label));
+  const categories = groupBy(counted, (g) => g.category || "기타").sort((a, b) => b.earned - a.earned);
+  return {
+    rows: list,
+    gpa: String(total?.gpa ?? "") || all.gpa,
+    earned: String(total?.cmpsjCdt ?? total?.aplyCdt ?? "") || (list.length ? String(all.earned) : ""),
+    terms,
+    categories,
+  };
 }
 
 export function summary(parts: { term: { code: string; name: string }; grid: Raw[]; enrolled: Raw[]; gradeSets: Raw }): AmsSummary {
   const g = grades(parts.gradeSets);
-  return { term: parts.term.name, classes: timetable(parts.grid), enrolledCredits: enrolledCredits(parts.enrolled), grades: g.rows, gpa: g.gpa, earned: g.earned };
+  return {
+    term: parts.term.name,
+    classes: timetable(parts.grid),
+    enrolledCredits: enrolledCredits(parts.enrolled),
+    grades: g.rows,
+    gpa: g.gpa,
+    earned: g.earned,
+    terms: g.terms,
+    categories: g.categories,
+  };
 }
