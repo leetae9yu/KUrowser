@@ -15,7 +15,9 @@ type Message =
   | { id: number; from: "user"; text: string }
   | { id: number; from: "app"; kind: "text"; text: string; tone: Tone }
   | { id: number; from: "app"; kind: "result"; outcome: Outcome }
-  | { id: number; from: "app"; kind: "ams"; topic: AmsTopic };
+  | { id: number; from: "app"; kind: "ams"; topic: AmsTopic }
+  | { id: number; from: "app"; kind: "choices"; text: string; options: Choice[] };
+type Choice = Extract<ChatReply, { kind: "choices" }>["options"][number];
 type Draft = Message extends infer M ? (M extends Message ? Omit<M, "id"> : never) : never;
 
 const AI_FAILED = "AI에 묻지 못했어요";
@@ -50,6 +52,8 @@ function fromReply(reply: Exclude<ChatReply, { kind: "intent" | "fallback" }>): 
   switch (reply.kind) {
     case "refused":
       return { from: "app", kind: "text", text: reply.text, tone: "quiet" };
+    case "choices":
+      return { from: "app", kind: "choices", text: reply.text, options: reply.options };
     case "opened":
     case "answer":
     case "clarify":
@@ -58,7 +62,23 @@ function fromReply(reply: Exclude<ChatReply, { kind: "intent" | "fallback" }>): 
   }
 }
 
-function Bubble({ message, onRun }: { message: Message; onRun: (text: string) => void }) {
+function Bubble({ message, onRun, onPick }: { message: Message; onRun: (text: string) => void; onPick: (choice: Choice) => void }) {
+  if (message.from === "app" && message.kind === "choices") {
+    return (
+      <li className="msg msg-app msg-choices">
+        <p className="bubble bubble-app">{message.text}</p>
+        <ul className="chips chips-reply" aria-label={message.text}>
+          {message.options.map((o) => (
+            <li key={o.label}>
+              <button type="button" className="chip" onClick={() => onPick(o)}>
+                {o.label}
+              </button>
+            </li>
+          ))}
+        </ul>
+      </li>
+    );
+  }
   if (message.from === "user") {
     return (
       <li className="msg msg-user">
@@ -304,6 +324,22 @@ export function Chat({ active }: { active: boolean }) {
   };
 
   const run = (text: string) => void send(text, false);
+  /** A step picked from the options asked back; the main process walks on from it (one more Jev call at most). */
+  const choose = async (choice: Choice) => {
+    if (busy) return;
+    push({ from: "user", text: choice.label });
+    setBusy(true);
+    let reply: ChatReply;
+    try {
+      reply = await api().treeContinue(choice.state);
+    } catch (error) {
+      reply = { kind: "error", text: error instanceof Error && error.message ? error.message : AI_FAILED };
+    } finally {
+      setBusy(false);
+    }
+    if (reply.kind === "intent" || reply.kind === "fallback") return;
+    push(fromReply(reply));
+  };
   const ask = (text: string) => void send(text, true);
 
   return (
@@ -316,7 +352,7 @@ export function Chat({ active }: { active: boolean }) {
             </div>
           </li>
           {messages.map((m) => (
-            <Bubble key={m.id} message={m} onRun={run} />
+            <Bubble key={m.id} message={m} onRun={run} onPick={choose} />
           ))}
           {busy && (
             <li className="msg msg-app">

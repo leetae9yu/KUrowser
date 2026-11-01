@@ -23,7 +23,7 @@ describe("parseJev", () => {
       },
       courses,
     );
-    expect(route).toEqual({ kind: "command", confidence: 0.91, topic: "deadlines", topicConfidence: 0.8, course: "자료구조", range: "tomorrow", onlyNew: false });
+    expect(route).toEqual({ kind: "command", confidence: 0.91, topic: "deadlines", topicConfidence: 0.8, course: "자료구조", range: "tomorrow", onlyNew: false, tree: {} });
   });
 
   test("drops a course that is not the student's and rejects an unknown kind", () => {

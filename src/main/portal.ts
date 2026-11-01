@@ -92,7 +92,7 @@ export function parseSchedule(html: string, year: number, half: 1 | 2): Schedule
 }
 
 /** AMS opens a menu after its own second sign-in step (a mail code) on the school page. */
-const amsMenu = (menu: string): string =>
+export const amsMenu = (menu: string): string =>
   `https://ams.korea.ac.kr/exsignon/main/main.jsp?RelayState=${btoa(`https://ams.korea.ac.kr?menuId=${menu}&isPc=true`).replace(/=+$/, "")}`;
 
 /** School pages students open most; each opens on the left beside the chat. */

@@ -1,4 +1,5 @@
-import type { ChatIntent, ReadCommand, SchoolMenu } from "../shared/types.ts";
+import type { ChatIntent, ReadCommand, SchoolMenu, TreeState } from "../shared/types.ts";
+import { readTree, treeQuestions } from "./tree.ts";
 
 /** command: the app reads school data and shows it; path: open a school page; chat: answer in words; write: change something at school (refused). */
 export type Kind = "command" | "path" | "chat" | "write";
@@ -37,6 +38,8 @@ export interface Route {
   menu?: string;
   /** A library name of the seat service. */
   library?: string;
+  /** The steps of the page tree Jev was sure of (area, then course or portal group). */
+  tree?: Omit<TreeState, "text">;
 }
 
 const KINDS: Record<Kind, string> = {
@@ -103,8 +106,10 @@ export function jevRequest(text: string, courses: string[], menus: readonly Scho
       course: { type: "choice", instructions: "학생 문장이 가리키는 과목은 무엇인가? 줄임말도 그 과목으로 본다.", criteria: courseCriteria },
       range: { type: "choice", instructions: "학생 문장이 말하는 기간은?", criteria: RANGES },
       only_new: { type: "noul", instructions: "학생이 새로 올라온 것이나 최근 것만 원하는가?" },
-      menu: { type: "choice", instructions: "학생이 열어 달라는 학교 화면은 무엇인가?", criteria: menuCriteria },
+      // Jev refuses a choice with only the none option (HTTP 400, still billed), so no menus means no menu question.
+      ...(menus.length ? { menu: { type: "choice", instructions: "학생이 열어 달라는 학교 화면은 무엇인가?", criteria: menuCriteria } } : {}),
       library: { type: "choice", instructions: "학생 문장이 가리키는 도서관은? 줄임말(중도, 과도 등)도 그 도서관으로 본다.", criteria: libraryCriteria },
+      ...treeQuestions(),
     },
   };
 }
@@ -132,6 +137,8 @@ export function parseJev(body: unknown, courses: string[], menus: readonly Schoo
   if (typeof answers.topic?.confidence === "number") route.topicConfidence = answers.topic.confidence;
   if (typeof menu === "string" && menus.some((m) => m.id === menu)) route.menu = menu;
   if (typeof library === "string" && (LIBRARIES as readonly string[]).includes(library)) route.library = library;
+  const courseConfidence = typeof answers.course?.confidence === "number" ? answers.course.confidence : 0;
+  route.tree = readTree(answers, { name: route.course, confidence: courseConfidence });
   return route;
 }
 

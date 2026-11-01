@@ -6,7 +6,7 @@ import { pathToFileURL } from "node:url";
 
 import { ATTENDANCE_TOOL_ID, CANVAS_ORIGIN, liveOptions } from "../engine/live.ts";
 import { courseFolder } from "../engine/materials.ts";
-import type { ChatReply, DownloadEvent, ReadCommand, Settings, Snapshot, SttEvent, SttPlan } from "../shared/types.ts";
+import type { ChatReply, TreeState, DownloadEvent, ReadCommand, Settings, Snapshot, SttEvent, SttPlan } from "../shared/types.ts";
 import { GatewayClient } from "./ai.ts";
 import { DiskCache } from "./cache.ts";
 import { devConfig } from "./dev.ts";
@@ -22,6 +22,7 @@ import { type SitesCache, SitesService } from "./sites.ts";
 import { keepLogin, makeEngineWindow, schoolSession, signIn, signOut } from "./school.ts";
 import { COMMAND_PROMPT, SUMMARY_LECTURE_PROMPT, SUMMARY_PROMPT, commandUserPrompt, parseCommand, parseSummaries, summaryUserPrompt } from "./sentence.ts";
 import { CHAT_PROMPT, chatUserPrompt, CLARIFY_PROMPT, intentOf, jevRequest, pageUrl, parseJev, routeUserPrompt, unsure } from "./route.ts";
+import { pick, PORTAL_GROUPS, portalScreens, readStep, stepOptions, stepPrompt, stepRequest, TREE_CONFIDENCE } from "./tree.ts";
 import { StateStore } from "./state.ts";
 import { captionText, estimateCredits, extractAudio, fetchCaption, resolveMedia, STT_MODEL, STT_SPEED, toSrt } from "./stt.ts";
 
@@ -205,6 +206,7 @@ async function chat(text: string): Promise<ChatReply> {
       if (!next || !pane.open(next)) open();
       return { kind: "refused", text: "제출, 출석, 글쓰기처럼 학교에 무언가를 바꾸는 일은 앱이 하지 않아요. 왼쪽 학교 화면에서 직접 해 주세요." };
     }
+    if (route.kind === "path" && treePage(route)) return await walkTree({ text, ...route.tree }, FIRST_CALL_STEPS);
     const action = intentOf(route);
     // Reading the academic system mails the student a sign-in code, so an unsure guess asks back first.
     const mailsCode = action && "intent" in action && action.intent.kind === "ams" && route.kind === "chat";
@@ -218,6 +220,79 @@ async function chat(text: string): Promise<ChatReply> {
   } finally {
     void refreshCredits();
   }
+}
+
+type TreeStep = "area" | "course" | "group" | "screen";
+/** The steps the sentence's first Jev call already answered; one it was unsure of is asked back, not asked again. */
+const FIRST_CALL_STEPS: ReadonlySet<TreeStep> = new Set(["area", "course", "group"]);
+/** School menus outside the LMS and the portal tree keep their direct page. */
+const OUTSIDE_TREE_MENUS: ReadonlySet<string> = new Set(["sugang", "loans", "seats", "calendar"]);
+
+function treePage(route: { topic: string; menu?: string }): boolean {
+  if (route.topic === "library_loans" || route.topic === "library_seats" || route.topic === "calendar") return false;
+  return !(route.topic === "school_menu" && route.menu && OUTSIDE_TREE_MENUS.has(route.menu));
+}
+
+async function canSpend(): Promise<boolean> {
+  if (!gateway.connected) return false;
+  const left = Date.now() - credits.at < CREDITS_FRESH_MS ? credits.left : await refreshCredits();
+  return left === null || left >= CHAT_MIN_CREDITS;
+}
+
+/**
+ * Walks the page tree from `start`: a step Jev has not answered yet gets one Jev call, an unsure step is asked back
+ * with its options, and a picked screen opens on the left. Addresses come only from the course tabs and the portal
+ * table, never from the state the renderer sends back.
+ */
+async function walkTree(start: TreeState, jevAnswered: ReadonlySet<TreeStep>): Promise<ChatReply> {
+  const courses = lms.snapshot().courses.map((c) => c.name);
+  let state = start;
+  for (let turn = 0; turn < 4; turn++) {
+    const screens = state.area === "lms" && state.course ? await lms.courseTabs(state.course) : state.area === "portal" && state.group ? portalScreens(state.group) : null;
+    const { step, labels } = stepOptions(state, courses, screens);
+    if (step === "screen" && state.screen) {
+      const screen = screens?.find((s) => s.label === state.screen);
+      if (!screen) return { kind: "error", text: "그 화면을 찾지 못했어요" };
+      const where = state.area === "lms" ? `${state.course} ${screen.label}` : `${state.group?.split(" > ").at(-1) ?? ""} ${screen.label}`;
+      const ams = screen.url.startsWith("https://ams.korea.ac.kr/");
+      return pane.open(screen.url)
+        ? { kind: "opened", text: `왼쪽에 ${where} 화면을 열었어요${ams ? ". 학사시스템은 메일로 온 인증번호를 한 번 넣어야 해요" : ""}` }
+        : { kind: "error", text: "그 화면을 열지 못했어요" };
+    }
+    if (!labels.length) return { kind: "error", text: "열 수 있는 화면을 찾지 못했어요" };
+    const current = state;
+    const ask = (): ChatReply => ({ kind: "choices", text: stepPrompt(step), options: labels.map((label) => ({ label, state: pick(current, step, label, labels)! })) });
+    if (jevAnswered.has(step) || !(await canSpend())) return ask();
+    const answer = readStep(await gateway.decide(stepRequest(state.text, step, labels)).catch(() => null), labels);
+    if (!answer.label || answer.confidence < TREE_CONFIDENCE) return ask();
+    state = pick(state, step, answer.label, labels)!;
+  }
+  return { kind: "error", text: "그 화면을 열지 못했어요" };
+}
+
+/** A step the student picked, checked against the options the app offers before the walk goes on. */
+function treeState(value: unknown): TreeState | null {
+  if (!value || typeof value !== "object") return null;
+  const v = value as Record<string, unknown>;
+  if (typeof v.text !== "string" || !v.text.trim() || v.text.length > 300) return null;
+  const state: TreeState = { text: v.text };
+  if (v.area !== undefined) {
+    if (v.area !== "lms" && v.area !== "portal") return null;
+    state.area = v.area;
+  }
+  if (v.course !== undefined) {
+    if (typeof v.course !== "string" || !lms.snapshot().courses.some((c) => c.name === v.course)) return null;
+    state.course = v.course;
+  }
+  if (v.group !== undefined) {
+    if (typeof v.group !== "string" || !PORTAL_GROUPS.includes(v.group)) return null;
+    state.group = v.group;
+  }
+  if (v.screen !== undefined) {
+    if (typeof v.screen !== "string" || v.screen.length > 80) return null;
+    state.screen = v.screen;
+  }
+  return state;
 }
 
 /** The open assignment of a course that is due first; none without a course, since a guess could open the wrong one. */
@@ -361,6 +436,17 @@ function registerIpc(): void {
     if (typeof path !== "string") return;
     const target = normalize(path);
     if (target.startsWith(downloadDir() + sep) && existsSync(target) && statSync(target).isDirectory()) await shell.openPath(target);
+  });
+  handle("treeContinue", async (value: unknown): Promise<ChatReply> => {
+    const state = treeState(value);
+    if (!state) return { kind: "error", text: "그 화면을 열지 못했어요" };
+    try {
+      return await walkTree(state, new Set());
+    } catch (error) {
+      return { kind: "error", text: error instanceof Error ? error.message : "그 화면을 열지 못했어요" };
+    } finally {
+      void refreshCredits();
+    }
   });
   handle("chat", (text: unknown): Promise<ChatReply> | ChatReply =>
     typeof text === "string" && text.trim() ? chat(text.trim().slice(0, 300)) : { kind: "error", text: "" },

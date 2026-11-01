@@ -38,6 +38,7 @@ const api: KurowserApi = {
   onFocus: (fn) => listen("focus", fn),
   interpret: (text) => ipcRenderer.invoke("interpret", text),
   chat: (text) => ipcRenderer.invoke("chat", text),
+  treeContinue: (state) => ipcRenderer.invoke("treeContinue", state),
   sttPlan: (id) => ipcRenderer.invoke("sttPlan", id),
   sttRun: (id) => ipcRenderer.invoke("sttRun", id),
   onStt: (fn) => listen("stt", fn),
