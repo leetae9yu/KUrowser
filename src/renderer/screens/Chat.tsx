@@ -113,7 +113,8 @@ export function Chat({ active }: { active: boolean }) {
   const asked = messages.some((m) => m.from === "user");
   const count = messages.length + (busy ? 1 : 0);
   const seen = useRef(0);
-  const queued = useRef<Parsed[]>([]);
+  /** Requests waiting for data; one made before any course loaded is read again from its text once they have. */
+  const queued = useRef<Array<{ text: string; typed: boolean; rules: Parsed; blind: boolean }>>([]);
 
   useLayoutEffect(() => {
     const thread = threadRef.current;
@@ -184,20 +185,36 @@ export function Chat({ active }: { active: boolean }) {
 
   useEffect(() => {
     const next = queued.current[0];
-    if (!next || busy || waiting(next)) return;
+    if (!next || busy) return;
+    if (next.blind ? !coursesKnown() : waiting(next.rules)) return;
     queued.current = queued.current.slice(1);
-    void perform(next);
+    void (next.blind ? send(next.text, next.typed, false) : perform(next.rules, next.text, next.typed));
   });
+
+  const coursesKnown = (): boolean => {
+    const s = latest.current;
+    return s.data.courses.length > 0 || s.snapshot.phase === "ready" || s.snapshot.phase === "error";
+  };
+
+  const hold = (text: string, typed: boolean, rules: Parsed) => {
+    const s = latest.current;
+    queued.current = [...queued.current, { text, typed, rules, blind: !coursesKnown() }];
+    const site = rules.kind === "portal" || rules.kind === "schedule" || rules.kind === "loans";
+    const login = !site && (s.snapshot.phase === "login" || s.snapshot.phase === "keychain");
+    push({ from: "app", kind: "text", text: login ? "학교 로그인이 끝나면 이어서 할게요" : "아직 불러오는 중이에요. 끝나면 이어서 할게요", tone: "plain" });
+  };
 
   /**
    * A typed sentence goes to Jev first; chips, card buttons and course names are fixed commands and run at once
    * with the word rules. The rules also answer when the AI is not connected, out of credits, or its call failed.
    */
-  const send = async (text: string, typed: boolean) => {
+  const send = async (text: string, typed: boolean, echo = true) => {
     if (busy) return;
-    push({ from: "user", text });
+    if (echo) push({ from: "user", text });
     const s = latest.current;
-    if (!typed || !s.settings?.aiConnected) return perform(parseRules(text, s.data, s.sites));
+    if (!typed || !s.settings?.aiConnected) return perform(parseRules(text, s.data, s.sites), text, typed);
+    // Jev picks the course from the course list, so a sentence typed before any course loaded waits for it.
+    if (!coursesKnown()) return hold(text, typed, parseRules(text, s.data, s.sites));
     setBusy(true);
     let reply: ChatReply;
     try {
@@ -208,24 +225,19 @@ export function Chat({ active }: { active: boolean }) {
       setBusy(false);
     }
     const now = latest.current;
-    if (reply.kind === "intent") return perform(fromIntent(reply.intent, text, now.sites.menus));
+    if (reply.kind === "intent") return perform(fromIntent(reply.intent, text, now.sites.menus), text, false);
     if (reply.kind === "fallback") {
       const note = FALLBACK_NOTE[reply.reason];
       if (note) push({ from: "app", kind: "text", text: note, tone: "quiet" });
-      return perform(parseRules(text, now.data, now.sites));
+      return perform(parseRules(text, now.data, now.sites), text, false);
     }
     push(fromReply(reply));
   };
 
-  const perform = async (rules: Parsed) => {
+  /** `typed` stays true only for a sentence the AI has not read yet, so a re-read after loading may still ask it. */
+  const perform = async (rules: Parsed, text: string, typed: boolean) => {
     const s = latest.current;
-    if (waiting(rules)) {
-      queued.current = [...queued.current, rules];
-      const site = rules.kind === "portal" || rules.kind === "schedule" || rules.kind === "loans";
-      const login = !site && (s.snapshot.phase === "login" || s.snapshot.phase === "keychain");
-      push({ from: "app", kind: "text", text: login ? "학교 로그인이 끝나면 이어서 할게요" : "아직 불러오는 중이에요. 끝나면 이어서 할게요", tone: "plain" });
-      return;
-    }
+    if (waiting(rules)) return hold(text, typed, rules);
     if (rules.kind === "theme") {
       s.setTheme(rules.theme);
       push({ from: "app", kind: "text", text: rules.title, tone: "plain" });

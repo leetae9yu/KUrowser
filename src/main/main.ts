@@ -180,6 +180,7 @@ async function refreshCredits(): Promise<number | null> {
 async function chat(text: string): Promise<ChatReply> {
   if (!gateway.connected) return { kind: "fallback", reason: "offline" };
   const left = Date.now() - credits.at < CREDITS_FRESH_MS ? credits.left : await refreshCredits();
+  // An unknown balance does not hold back a sentence the student typed; the Gateway refuses a call it cannot bill.
   if (left !== null && left < CHAT_MIN_CREDITS) return { kind: "fallback", reason: "credits" };
   const snap = lms.snapshot();
   const courses = snap.courses.map((c) => c.name);
@@ -205,6 +206,9 @@ async function chat(text: string): Promise<ChatReply> {
       return { kind: "refused", text: "제출, 출석, 글쓰기처럼 학교에 무언가를 바꾸는 일은 앱이 하지 않아요. 왼쪽 학교 화면에서 직접 해 주세요." };
     }
     const action = intentOf(route);
+    // Reading the academic system mails the student a sign-in code, so an unsure guess asks back first.
+    const mailsCode = action && "intent" in action && action.intent.kind === "ams" && route.kind === "chat";
+    if (mailsCode && (route.topicConfidence ?? 0) < ROUTE_CONFIDENCE) return await clarify();
     if (action && "intent" in action) return { kind: "intent", intent: action.intent };
     if (action) return open(action.open);
     if (route.kind === "chat") return { kind: "answer", text: await gateway.complete(CHAT_PROMPT, chatUserPrompt(text, chatContext()), 300) };
