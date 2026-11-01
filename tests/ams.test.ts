@@ -83,6 +83,7 @@ describe("timetable and credits", () => {
         { syy: 2025, smtDivcd: "1S", subjtNm: "가짜과목", cmpsjDivNm: "교양", cdt: 3, gradeGrdDivcd: "A" },
         { syy: 2025, smtDivcd: "1R", subjtNm: "가짜과목", cmpsjDivNm: "교양", cdt: 3, gradeGrdDivcd: "B" },
         { syy: 2025, smtDivcd: "2W", subjtNm: "가짜과목", cmpsjDivNm: "교양", cdt: 3, gradeGrdDivcd: "A+" },
+        { syy: 2025, smtDivcd: "2W", subjtNm: "가짜재수강", cmpsjDivNm: "교양", cdt: 3, gradeGrdDivcd: "C", gradeDelDivNm: "재수강삭제" },
       ],
     });
     expect(g.terms).toEqual([
@@ -90,6 +91,9 @@ describe("timetable and credits", () => {
       { label: "2025학년도 여름학기", earned: 3, gpa: "4.00" },
       { label: "2025학년도 겨울학기", earned: 3, gpa: "4.50" },
     ]);
+    // The dropped retake row is still listed but counts in no total.
+    expect(g.rows).toHaveLength(4);
+    expect(g.earned).toBe("9");
   });
 
   test("credits per term and per category come from the course rows; failed and ungraded courses earn none", () => {

@@ -153,22 +153,27 @@ function groupBy(list: AmsGrade[], key: (g: AmsGrade) => string): AmsCreditLine[
 
 /**
  * The whole record: every course row, the school's cumulative earned credits and average, and the same counted per
- * term and per course category from the course rows. The cumulative set holds one running line per term (oldest
- * first), so the line with the most earned credits is the one up to now; the course rows answer when it is missing.
+ * term and per course category from the course rows. The cumulative set holds one line per term (oldest first) and
+ * then one line for the whole record, which has the most earned credits; the course rows answer when it is missing.
+ * A row the school marks as dropped from the record (`gradeDelDivNm`, e.g. the first try of a retaken course) is
+ * listed but not counted.
  */
 export function grades(sets: Raw): { rows: AmsGrade[]; gpa: string; earned: string; terms: AmsCreditLine[]; categories: AmsCreditLine[] } {
-  const list = rows(sets, AMS_LOOKUPS.grades.table).map((r) => ({
+  const raw = rows(sets, AMS_LOOKUPS.grades.table);
+  const toGrade = (r: Raw): AmsGrade => ({
     term: termName(r),
     title: String(r.subjtNm ?? ""),
     category: String(r.cmpsjDivNm ?? ""),
     credits: String(r.cdt ?? ""),
     grade: String(r.gradeGrdDivcd ?? ""),
-  }));
+  });
+  const list = raw.map(toGrade);
+  const counted = raw.filter((r) => !String(r.gradeDelDivNm ?? "").trim()).map(toGrade);
   const earnedOf = (r: Raw): number => num(r.cmpsjCdt ?? r.aplyCdt);
   const total = rows(sets, "dsGradeAcmtlAll").reduce<Raw | null>((best, r) => (!best || earnedOf(r) >= earnedOf(best) ? r : best), null);
-  const all = tally("", list);
-  const terms = groupBy(list, (g) => g.term).sort((a, b) => termOrder(a.label) - termOrder(b.label));
-  const categories = groupBy(list, (g) => g.category || "기타").sort((a, b) => b.earned - a.earned);
+  const all = tally("", counted);
+  const terms = groupBy(counted, (g) => g.term).sort((a, b) => termOrder(a.label) - termOrder(b.label));
+  const categories = groupBy(counted, (g) => g.category || "기타").sort((a, b) => b.earned - a.earned);
   return {
     rows: list,
     gpa: String(total?.gpa ?? "") || all.gpa,
