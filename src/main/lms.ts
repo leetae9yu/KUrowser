@@ -434,7 +434,9 @@ export class LmsService {
     const cached = this.tabs.get(course.id);
     if (cached) return cached;
     const data = await this.withSession((session) => session.fetchJson(`/api/v1/courses/${course.id}/tabs?per_page=100`), false);
-    const list = (Array.isArray(data) ? (data as Raw[]) : [])
+    // An error reply is not cached, so the next request reads the menu again.
+    if (!Array.isArray(data)) return [];
+    const list = (data as Raw[])
       .filter((t) => t && !t.hidden && typeof t.label === "string" && typeof t.html_url === "string")
       .map((t) => ({ label: String(t.label), url: new URL(String(t.html_url), CANVAS_ORIGIN).href }))
       .filter((t) => t.url.startsWith(`${CANVAS_ORIGIN}/`));

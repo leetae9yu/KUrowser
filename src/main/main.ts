@@ -441,7 +441,8 @@ function registerIpc(): void {
     const state = treeState(value);
     if (!state) return { kind: "error", text: "그 화면을 열지 못했어요" };
     try {
-      return await walkTree(state, new Set());
+      // A picked step goes on without asking Jev again before the screen, so a sentence stays at two paid calls.
+      return await walkTree(state, FIRST_CALL_STEPS);
     } catch (error) {
       return { kind: "error", text: error instanceof Error ? error.message : "그 화면을 열지 못했어요" };
     } finally {

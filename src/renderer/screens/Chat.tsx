@@ -68,8 +68,8 @@ function Bubble({ message, onRun, onPick }: { message: Message; onRun: (text: st
       <li className="msg msg-app msg-choices">
         <p className="bubble bubble-app">{message.text}</p>
         <ul className="chips chips-reply" aria-label={message.text}>
-          {message.options.map((o) => (
-            <li key={o.label}>
+          {message.options.map((o, i) => (
+            <li key={`${i}-${o.label}`}>
               <button type="button" className="chip" onClick={() => onPick(o)}>
                 {o.label}
               </button>
