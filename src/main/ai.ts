@@ -40,9 +40,9 @@ async function assertKeyStoreReady(): Promise<void> {
 }
 
 /**
- * Encrypts with the OS keychain key. The async API threw on the Mac mini's signed build after a key was issued
- * ("Error while encrypting the text provided to safeStorage.encryptStringAsync"), so the synchronous API, which
- * uses the same keychain item, is the fallback.
+ * Encrypts with the OS keychain key. The async API threw on a signed macOS build after a key was issued
+ * ("Error while encrypting the text provided to safeStorage.encryptStringAsync"), so the synchronous API is the
+ * fallback; Electron documents that text it encrypts can be read back by decryptStringAsync.
  */
 async function encrypt(text: string): Promise<Buffer> {
   try {
@@ -82,8 +82,9 @@ async function loadKey(): Promise<string | null> {
 async function assertCanStoreKey(): Promise<void> {
   try {
     await encrypt("kurowser-key-store-check");
-  } catch {
-    throw new Error("이 컴퓨터 키체인에 AI 키를 저장할 수 없어서 키를 받지 않았어요");
+  } catch (error) {
+    const cause = error instanceof Error && error.message ? ` (${error.message})` : "";
+    throw new Error(`이 컴퓨터 키체인에 AI 키를 저장할 수 없어서 키를 받지 않았어요${cause}`);
   }
 }
 
