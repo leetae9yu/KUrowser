@@ -72,7 +72,7 @@ jobs:
           KUROWSER_GOOGLE_CLIENT_ID: ${{ secrets.KUROWSER_GOOGLE_CLIENT_ID }}
           KUROWSER_GOOGLE_CLIENT_SECRET: ${{ secrets.KUROWSER_GOOGLE_CLIENT_SECRET }}
         run: |
-          { bun run build && bunx electron-builder --win nsis --$ARCH --publish never; } > "$RUNNER_TEMP/build.log" 2>&1 || { echo "Failed. Run the build in the private repository for details."; exit 1; }
+          { bun run build:release && bunx electron-builder --win nsis --$ARCH --publish never; } > "$RUNNER_TEMP/build.log" 2>&1 || { echo "Failed. Run the build in the private repository for details."; exit 1; }
           if [ -n "$(find dist -name '*.map' -print -quit)" ]; then echo "Source map in the bundle"; exit 1; fi
           id="${KUROWSER_GOOGLE_CLIENT_ID//[[:space:]]/}"
           secret="${KUROWSER_GOOGLE_CLIENT_SECRET//[[:space:]]/}"
