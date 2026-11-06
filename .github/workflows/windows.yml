@@ -1,0 +1,111 @@
+name: Windows build
+run-name: Windows ${{ inputs.ref }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Source commit
+        required: true
+
+permissions:
+  contents: read
+
+# Logs here are public. Build output goes to a file, so a compiler or test failure cannot print source lines.
+jobs:
+  build:
+    name: Windows ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: windows-latest
+          - arch: arm64
+            runner: windows-11-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Get source
+        env:
+          DEPLOY_KEY: ${{ secrets.KUROWSER_DEV_DEPLOY_KEY }}
+          SOURCE_REF: ${{ inputs.ref }}
+        run: |
+          umask 077
+          tmp=$(cygpath -u "$RUNNER_TEMP")
+          printf '%s\n' "$DEPLOY_KEY" > "$tmp/key"
+          echo 'github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl' > "$tmp/known_hosts"
+          export GIT_SSH_COMMAND="ssh -i $tmp/key -o IdentitiesOnly=yes -o UserKnownHostsFile=$tmp/known_hosts"
+          git init -q .
+          git fetch -q --depth 1 git@github.com:leetae9yu/KUrowser-dev.git "$SOURCE_REF" > /dev/null 2>&1
+          git checkout -q FETCH_HEAD > /dev/null 2>&1
+          rm -rf .git "$tmp/key"
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+
+      - name: Install
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          {
+            if [ "$ARCH" = x64 ]; then
+              bun install --frozen-lockfile
+            else
+              # ffmpeg-static has no Windows arm64 build; the x64 ffmpeg runs under emulation.
+              bun install --frozen-lockfile --ignore-scripts
+              node node_modules/electron/install.js
+              npm_config_arch=x64 node node_modules/ffmpeg-static/install.js
+              test -f node_modules/ffmpeg-static/ffmpeg.exe
+            fi
+          } > "$RUNNER_TEMP/install.log" 2>&1 || { echo "Failed. Run the build in the private repository for details."; exit 1; }
+
+      - name: Build NSIS installer
+        env:
+          ARCH: ${{ matrix.arch }}
+          KUROWSER_GOOGLE_CLIENT_ID: ${{ secrets.KUROWSER_GOOGLE_CLIENT_ID }}
+          KUROWSER_GOOGLE_CLIENT_SECRET: ${{ secrets.KUROWSER_GOOGLE_CLIENT_SECRET }}
+        run: |
+          { bun run build && bunx electron-builder --win nsis --$ARCH --publish never; } > "$RUNNER_TEMP/build.log" 2>&1 || { echo "Failed. Run the build in the private repository for details."; exit 1; }
+          if [ -n "$(find dist -name '*.map' -print -quit)" ]; then echo "Source map in the bundle"; exit 1; fi
+          grep -qF -- "$KUROWSER_GOOGLE_CLIENT_ID" dist/main/main.js && grep -qF -- "$KUROWSER_GOOGLE_CLIENT_SECRET" dist/main/main.js || { echo "Google client missing from the bundle"; exit 1; }
+          echo "Built, Google client in the bundle"
+
+      - name: Install silently and open the first window
+        shell: pwsh
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          $setup = Get-ChildItem release -Filter "KUrowser-*-$env:ARCH-setup.exe" | Select-Object -First 1
+          if (-not $setup) { throw "installer not found" }
+          Start-Process -FilePath $setup.FullName -ArgumentList "/S" -Wait
+          $exe = Get-ChildItem "$env:LOCALAPPDATA\Programs" -Recurse -Filter "KUrowser.exe" | Select-Object -First 1
+          if (-not $exe) { throw "installed KUrowser.exe not found" }
+          $app = Start-Process -FilePath $exe.FullName -ArgumentList "--remote-debugging-port=9333" -PassThru
+          $env:SMOKE_SHOT = "smoke-$env:ARCH.png"
+          node .github/scripts/smoke.mjs *> "$env:RUNNER_TEMP\smoke.log"
+          $code = $LASTEXITCODE
+          Stop-Process -Id $app.Id -Force -ErrorAction SilentlyContinue
+          Get-Process KUrowser -ErrorAction SilentlyContinue | Stop-Process -Force
+          Write-Host "first window exit code: $code"
+          exit $code
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: kurowser-windows-${{ matrix.arch }}
+          path: release/KUrowser-*-setup.exe
+          if-no-files-found: error
+          retention-days: 7
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: kurowser-windows-smoke-${{ matrix.arch }}
+          path: smoke-${{ matrix.arch }}.png
+          if-no-files-found: warn
+          retention-days: 3
