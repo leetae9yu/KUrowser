@@ -7,6 +7,10 @@ on:
       ref:
         description: Source commit
         required: true
+      update_test:
+        description: Also update a 0.0.1 test build to 0.0.2 through a feed on the runner (no release is made)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -102,7 +106,11 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: kurowser-windows-${{ matrix.arch }}
-          path: release/KUrowser-*-setup.exe
+          # latest.yml and the blockmap are what installed apps read to update (scripts/publish-release.sh merges the two latest.yml).
+          path: |
+            release/KUrowser-*-setup.exe
+            release/KUrowser-*-setup.exe.blockmap
+            release/latest.yml
           if-no-files-found: error
           retention-days: 7
 
@@ -111,5 +119,85 @@ jobs:
         with:
           name: kurowser-windows-smoke-${{ matrix.arch }}
           path: smoke-${{ matrix.arch }}.png
+          if-no-files-found: warn
+          retention-days: 3
+
+  # A real update with the source's own updater: install 0.0.1, let it find 0.0.2 on a local feed, press [받기] and
+  # [다시 시작], then check that 0.0.2 is installed and running. The test builds are never uploaded or released.
+  update-test:
+    name: Windows update test
+    if: ${{ inputs.update_test }}
+    runs-on: windows-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Get source
+        env:
+          DEPLOY_KEY: ${{ secrets.KUROWSER_DEV_DEPLOY_KEY }}
+          SOURCE_REF: ${{ inputs.ref }}
+        run: |
+          [[ "$SOURCE_REF" =~ ^[0-9a-f]{40}$ ]] || { echo "ref must be a full commit hash"; exit 1; }
+          umask 077
+          tmp=$(cygpath -u "$RUNNER_TEMP")
+          printf '%s\n' "$DEPLOY_KEY" > "$tmp/key"
+          echo 'github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl' > "$tmp/known_hosts"
+          export GIT_SSH_COMMAND="ssh -i $tmp/key -o IdentitiesOnly=yes -o UserKnownHostsFile=$tmp/known_hosts"
+          git init -q .
+          git fetch -q --depth 1 git@github.com:leetae9yu/KUrowser-dev.git "$SOURCE_REF" > /dev/null 2>&1
+          git checkout -q FETCH_HEAD > /dev/null 2>&1
+          rm -rf .git "$tmp/key"
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+
+      - name: Build 0.0.1 and 0.0.2 with a local feed
+        run: |
+          {
+            bun install --frozen-lockfile
+            bun run build:renderer
+            for v in 0.0.1 0.0.2; do
+              node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json'));p.version='$v';fs.writeFileSync('package.json',JSON.stringify(p,null,2))"
+              bun run build:main --minify --define 'KUROWSER_UPDATE_TEST_FEED="http://127.0.0.1:8123/"'
+              bunx electron-builder --win nsis --x64 --publish never -c.directories.output="out-$v"
+            done
+          } > "$RUNNER_TEMP/build.log" 2>&1 || { echo "Failed. Run the build in the private repository for details."; exit 1; }
+          ls out-0.0.2 | grep -E 'latest\.yml|setup\.exe'
+
+      - name: Install 0.0.1, update to 0.0.2
+        shell: pwsh
+        run: |
+          $log = Join-Path $env:RUNNER_TEMP "feed.log"
+          New-Item $log -ItemType File -Force | Out-Null
+          $feed = Start-Process node -ArgumentList ".github/scripts/update-server.mjs", "out-0.0.2", "8123", $log -PassThru
+          $setup = Get-ChildItem out-0.0.1 -Filter "KUrowser-0.0.1-x64-setup.exe" | Select-Object -First 1
+          Start-Process -FilePath $setup.FullName -ArgumentList "/S" -Wait
+          $exe = Get-ChildItem "$env:LOCALAPPDATA\Programs" -Recurse -Filter "KUrowser.exe" | Select-Object -First 1
+          Write-Host "installed: $((Get-Item $exe.FullName).VersionInfo.ProductVersion)"
+          Start-Process -FilePath $exe.FullName -ArgumentList "--remote-debugging-port=9333" | Out-Null
+          $env:UPDATE_LOG = $log
+          $env:UPDATE_VERSION = "0.0.2"
+          node .github/scripts/update-test.mjs
+          if ($LASTEXITCODE -ne 0) { Get-Content $log; throw "update test failed" }
+          $deadline = (Get-Date).AddMinutes(3)
+          do {
+            Start-Sleep -Seconds 2
+            $version = (Get-Item $exe.FullName -ErrorAction SilentlyContinue).VersionInfo.ProductVersion
+            $running = Get-Process KUrowser -ErrorAction SilentlyContinue
+          } until (($version -like "0.0.2*" -and $running) -or (Get-Date) -gt $deadline)
+          Write-Host "after restart: version $version, running $([bool]$running)"
+          Write-Host "feed requests:"; Get-Content $log
+          Get-Process KUrowser -ErrorAction SilentlyContinue | Stop-Process -Force
+          Stop-Process -Id $feed.Id -Force -ErrorAction SilentlyContinue
+          if (-not ($version -like "0.0.2*" -and $running)) { throw "0.0.2 is not installed and running" }
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: kurowser-windows-update-test
+          path: update-ready.png
           if-no-files-found: warn
           retention-days: 3
