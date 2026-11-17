@@ -499,6 +499,8 @@ html.js .reveal.in{opacity:1;transform:none}
   // attach the film after the page has loaded so it never holds up first paint or the load event
   const attach = () => {
     v.querySelectorAll("source[data-src]").forEach(s => { s.src = s.dataset.src; s.removeAttribute("data-src"); });
+    // the poster is the 15 s frame; start there so playback continues from what is already on screen
+    v.addEventListener("loadedmetadata", () => { v.currentTime = 15; }, { once: true });
     v.preload = "auto"; v.load();
     new IntersectionObserver(([e]) => { if (e.isIntersecting && !userPaused) v.play().catch(paint); else if (!e.isIntersecting) v.pause(); }, { threshold: .25 }).observe(v);
   };
