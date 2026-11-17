@@ -1,0 +1,6 @@
+pretendard-subset.woff2 is a subset of Pretendard Variable.
+
+Pretendard
+Copyright (c) 2021, Kil Hyung-jin (https://github.com/orioncactus/pretendard)
+This Font Software is licensed under the SIL Open Font License, Version 1.1.
+License text: https://openfontlicense.org/open-font-license-official-text/
