@@ -258,8 +258,9 @@ html.js .reveal.in{opacity:1;transform:none}
         <p class="meta">macOS(Apple Silicon) · Windows(x64, arm64) · 최신 <span data-version>v0.5.4</span></p>
       </div>
       <div class="player reveal">
-        <video id="film" muted loop playsinline preload="metadata" poster="assets/poster.webp" width="1280" height="720" aria-label="KUrowser 소개 영상: 마감 찾기, 자료 받기, 공지 보관, 과제 제출 안내를 차례로 보여 줘요">
-          <source src="assets/kurowser-motion-720.mp4" type="video/mp4">
+        <video id="film" muted loop playsinline preload="none" poster="assets/poster.webp" width="1280" height="720" aria-label="KUrowser 소개 영상: 마감 찾기, 자료 받기, 공지 보관, 과제 제출 안내를 차례로 보여 줘요">
+          <source data-src="assets/kurowser-motion-720.webm" type="video/webm">
+          <source data-src="assets/kurowser-motion-720.mp4" type="video/mp4">
         </video>
         <button class="vbtn" id="vbtn" type="button" aria-pressed="false">
           <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" data-i="pause"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>
@@ -495,7 +496,13 @@ html.js .reveal.in{opacity:1;transform:none}
   };
   v.addEventListener("play", paint); v.addEventListener("pause", paint);
   b.addEventListener("click", () => { if (v.paused) { userPaused = false; v.play(); } else { userPaused = true; v.pause(); } });
-  new IntersectionObserver(([e]) => { if (e.isIntersecting && !userPaused) v.play().catch(paint); else if (!e.isIntersecting) v.pause(); }, { threshold: .25 }).observe(v);
+  // attach the film after the page has loaded so it never holds up first paint or the load event
+  const attach = () => {
+    v.querySelectorAll("source[data-src]").forEach(s => { s.src = s.dataset.src; s.removeAttribute("data-src"); });
+    v.preload = "auto"; v.load();
+    new IntersectionObserver(([e]) => { if (e.isIntersecting && !userPaused) v.play().catch(paint); else if (!e.isIntersecting) v.pause(); }, { threshold: .25 }).observe(v);
+  };
+  if (document.readyState === "complete") attach(); else addEventListener("load", attach, { once: true });
   paint();
 
   // zoom card parallax
